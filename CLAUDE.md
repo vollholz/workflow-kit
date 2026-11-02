@@ -7,11 +7,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm-Workspace mit zwei Paketen, die Apps Workflows geben (Automationen, Fälle mit Aufgaben und Genehmigungen,
 Zustandsmodelle, Warteschlangen):
 
-- `packages/workflow` → `@vollholz/workflow`: Ports, Definition (JSON-Schema + Prüfung), Ausdrücke, Fastify-5-Plugin;
-  ab Stufe 1 Engine, Migrationen (PostgreSQL, RLS) und Job-Handler.
+- `packages/workflow` → `@vollholz/workflow`: Ports, Definition (JSON-Schema + Prüfung), Ausdrücke, Engine für
+  Automationen, Migrationen (PostgreSQL, RLS), Job-Handler, Fastify-5-Plugin mit REST-Routen.
 - `packages/workflow-web` → `@vollholz/workflow-web`: React-19-Provider und Bausteine.
 
-Stand: **Stufe 0** (Gerüst). Konzept: «Workflows als Baukasten» (Nr. 118) im Repository der ersten App
+Stand: **Stufe 1** (Automation) im Backend (`@vollholz/workflow` 0.2.0): Engine, Migration `workflow_001_core.sql`,
+Jobs `workflow.step`/`workflow.start`, `tick`, Routen. `workflow-web` ist noch auf Stufe 0 (eigene Stufe folgt);
+`checkTransition` erlaubt jeden Wechsel (Stufe 4). Konzept: «Workflows als Baukasten» (Nr. 118) im Repository der ersten App
 (`docs/konzepte/workflow-baukasten.md`); Abschnitte 6a (Schnitt Paket ↔ App), 8.2 (Ports), 13 (Stufen) sind massgebend.
 
 Sprache im ganzen Repo ist Deutsch in Schweizer Rechtschreibung («ss» statt «ß», Anführungszeichen «»): Kommentare,
@@ -59,15 +61,30 @@ node scripts/changelog.ts check --base origin/main
 
 ### Ports statt Abhängigkeiten
 
-`src/ports.ts` enthält nur Typen. Die App liefert `WorkflowHost` (`actor`, `active`, `can`, `members`, `audit`, `emit`,
-`jobs`, optional `notify`, `http`, und `error` als Fehlerfabrik – das Paket wirft im Request-Pfad nur über
-`host.error`), Bezugstypen (`WorkflowSubject`), Aktionen (`WorkflowAction` mit `needs`, `run`, `dryRun`),
+`src/ports.ts` enthält nur Typen. Die App liefert `WorkflowHost` (`tx`, `actor`, `active`, `can`, `members`, `audit`,
+`emit`, `jobs`, optional `canActAs`, `notify`, `http`, und `error` als Fehlerfabrik – das Paket wirft im Request-Pfad nur
+über `host.error`), Bezugstypen (`WorkflowSubject`), Aktionen (`WorkflowAction` mit `needs`, `run`, `dryRun`),
 Ereignistypen (`EventSource`), Zustandsfelder (`StateField`) und Feldarten (`FieldKind`). Datenbankzugriff nur über
 `Tx { query(sql, params) }`, keine Datenbank-Bibliothek im Paket.
 
 `workflow(options)` (`src/index.ts`) prüft die Optionen beim Zusammenstecken (Fehler der Einbindung als `Error`) und
-liefert `{ plugin, dispatch, checkTransition, jobs, migrations, limits, validate }`. `dispatch` und `checkTransition`
-liegen im Schreibpfad der App: Sie müssen ohne aktive Workflows praktisch nichts kosten.
+liefert `{ plugin, dispatch, checkTransition, jobs, tick, invalidateTriggers, migrations, limits, validate }`.
+`dispatch` und `checkTransition` liegen im Schreibpfad der App: Sie müssen ohne aktive Workflows praktisch nichts
+kosten (`dispatch` ohne Treffer im Zwischenspeicher: keine Abfrage, Test in `shop.test.ts`).
+
+### Engine, Datenbank, Routen
+
+- `src/engine.ts`: `dispatch` (Zwischenspeicher der Auslöser je Mandant, Zähler `workflow_settings.version`), Läufe
+  anlegen (Grenzen, Kettentiefe), ein Schritt je Job und Transaktion (Aktion im Savepoint, Rechte über `needs`),
+  Fehler/Wiederholung/Vorfall, `tick`, Probelauf (Savepoint, zurückgerollt). Die Engine liest an der Lesesicht vorbei
+  (`workflow.engine = on`, lokal, danach zurückgesetzt); Ereignisse an derselben `tx` während einer Aktion gelten als
+  Ereignisse aus dem Lauf (Schleifenschutz).
+- `src/cursor.ts`: Position eines Laufs als Ausführungspfad (`/steps/1/items/3/steps/0`), rein und einzeln getestet.
+- `src/cron.ts`: Cron (fünf Felder, Zeitzone über `Intl`, Sommerzeit) und Dauern (ISO 8601, `BD`).
+- `migrations/workflow_NNN_*.sql` + `src/migrations.ts`: Platzhalter `{{schema}}`, `{{app}}`, `{{sched}}`, `{{tenant}}`,
+  `{{principal}}`; idempotent; jede Tabelle RLS `ENABLE` + `FORCE`; Lesesicht der Läufe über
+  `<schema>.workflow_subjects(jsonb)`. Neue Migration = neue Datei, bestehende nie ändern, sobald veröffentlicht.
+- `src/routes.ts`: REST-Routen (JSON-Schema, deutsche Fehler über `host.error`, Rechte über `host.can`, Audit).
 
 ### Definition und Ausdrücke
 
@@ -95,7 +112,13 @@ Parameter-Properties. Relative Imports tragen die Endung `.ts`/`.tsx`. Der Build
 
 - `workflow/test/definition.test.ts`, `expressions.test.ts`: Schema, Meldungen, Bedingungen, Platzhalter.
 - `workflow/test/shop.test.ts`: Nachweis «app-agnostisch» – Mini-App «shop» mit Host im Speicher. Gute Referenz dafür,
-  wie eine App das Paket einbindet; Teil der Typprüfung.
+  wie eine App das Paket einbindet; Teil der Typprüfung. Misst auch `dispatch` ohne Treffer.
+- `workflow/test/cron.test.ts`, `engine.test.ts`: Cron und Sommerzeit, Schrittauflösung, Grenzen, Schleifenschutz.
+- `workflow/test/integration.test.ts`: «shop» gegen PostgreSQL (Migrationen, RLS, Ereignis → Lauf → Aktion, Vorfälle,
+  Schleife, Probelauf, Zeitplan, manueller Start, Opt-in). Braucht `TEST_POSTGRES_URL` (Superuser), sonst sichtbar
+  übersprungen; lokal z. B. `docker run -d --rm -p 55432:5432 -e POSTGRES_PASSWORD=test postgres:17` und
+  `TEST_POSTGRES_URL=postgres://postgres:test@localhost:55432/postgres npm test -w @vollholz/workflow`. CI startet
+  PostgreSQL als Service.
 - `workflow-web/test/components.test.tsx`: Provider und Bausteine.
 - `scripts/*.test.ts`: Release-Notes-Prüfung und Grenzen.
 
