@@ -1,6 +1,7 @@
 /**
  * REST-Routen des Baukastens unter `<prefix>` (Standard `/v1`): Workflows (Entwurf, Prüfen, Aktivieren, Pausieren,
- * Archivieren, Versionen), manueller Start, Probelauf, Läufe mit Schrittprotokoll, Vorfälle, Einstellungen, Status.
+ * Archivieren, Versionen), manueller Start, Probelauf, Läufe mit Schrittprotokoll, Vorfälle, Einstellungen, Status und
+ * Angaben für den Editor (`meta`: angemeldete Ereignisse, Aktionen, Bezugstypen mit Feldern).
  *
  * Regeln:
  * - Jede Route liest den Akteur über `host.actor(req)` und arbeitet in genau einer Transaktion `host.tx(req, …)`.
@@ -8,18 +9,23 @@
  *   Läufe ohne Workflow am Bereich `tenantScope`). Läufe sieht nur, wer den Bezug sieht (RLS) und `workflow:read` hat.
  * - Fehler nur über `host.error(status, code, detail)` mit deutschem Text; Codes: `invalid`, `invalid-definition`,
  *   `forbidden`, `not-found`, `conflict`, `precondition-required`, `module-disabled`, `limit`.
- * - Ausser Status und Einstellungen antworten alle Routen mit 404 `module-disabled`, solange das Modul in der Umgebung
- *   oder im Mandanten ausgeschaltet ist.
+ * - Ausser Status, Meta und Einstellungen antworten alle Routen mit 404 `module-disabled`, solange das Modul in der
+ *   Umgebung oder im Mandanten ausgeschaltet ist (Meta und Einstellungen nur in der Umgebung).
  * - Jede Änderung geht ins Audit (`host.audit`); Aktivieren, Pausieren, Archivieren melden zusätzlich `workflow.*`.
  * - Entwürfe mit optimistischer Sperre: `If-Match: "<revision>"` oder `revision` im Körper; die Antwort trägt `ETag`.
  */
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { isValidTimeZone, nextCronTime } from './cron.ts';
-import { DEFINITION_SCHEMA_VERSION, validateDefinition, type DefinitionError, type WorkflowDefinition } from './definition.ts';
+import { DEFINITION_SCHEMA_VERSION, STEP_KINDS, validateDefinition, type DefinitionError, type WorkflowDefinition } from './definition.ts';
 import { definitionChecksum, stageProblems, type Engine, type RunRow, type TenantSettings, type WorkflowRow } from './engine.ts';
+import { WORKFLOW_EVENT_TYPES } from './events.ts';
+import { CONDITION_OPS, FORMATTERS, UNARY_OPS } from './expressions.ts';
 import { workflowPermissions } from './permissions.ts';
-import type { ActorRef, ScopeRef, SubjectRef, Tx, WorkflowHost, WorkflowLimits, WorkflowSubject } from './ports.ts';
+import type {
+  ActorRef, EventSource, FieldDef, FieldKind, JsonSchema, ScopeRef, StateField, SubjectRef, Tx, WorkflowAction, WorkflowHost, WorkflowLimits,
+  WorkflowSubject,
+} from './ports.ts';
 
 export interface RouteOptions {
   engine: Engine;
@@ -31,6 +37,10 @@ export interface RouteOptions {
   version: string;
   tenantScope: ScopeRef;
   subjects: WorkflowSubject[];
+  actions: WorkflowAction[];
+  events: EventSource[];
+  stateFields: StateField[];
+  fields: FieldKind[];
   validate(definition: unknown): ReturnType<typeof validateDefinition>;
 }
 
@@ -44,6 +54,27 @@ export interface WorkflowStatus {
   available: boolean;
   stage: number;
   version: string;
+}
+
+/**
+ * Antwort von `GET <prefix>/workflows/meta`: was die App angemeldet hat, für den Editor der Oberfläche. Felder der
+ * Bezugstypen gelten für den angefragten Bereich (`scopeType`/`scopeId`, sonst `tenantScope`).
+ */
+export interface WorkflowMeta {
+  stage: number;
+  /** Ereignistypen der App, danach die des Baukastens (`builtin: true`, nur mit `includeWorkflowEvents` wirksam). */
+  events: { type: string; label: string; description: string | null; subjectType: string | null; filterFields: FieldDef[]; builtin: boolean }[];
+  actions: { key: string; label: string; group: string; input: JsonSchema; output: JsonSchema | null }[];
+  subjectTypes: { type: string; label: string; fields: FieldDef[] }[];
+  stateFields: { subjectType: string; key: string; label: string }[];
+  fieldKinds: { key: string; label: string; valueSchema: JsonSchema }[];
+  /** Schrittarten, die diese Stufe ausführt. */
+  stepKinds: string[];
+  operators: string[];
+  unaryOperators: string[];
+  formatters: string[];
+  /** Kann beim Aktivieren ein anderer Akteur gewählt werden (`host.canActAs`)? */
+  canActAs: boolean;
 }
 
 const LIMIT_KEYS = ['activeWorkflows', 'runsPerDay', 'stepsPerRun', 'foreachItems', 'httpCallsPerDay', 'chainDepth', 'runsPerSubjectPerMinute'] as const;
@@ -157,6 +188,34 @@ export function registerRoutes(app: FastifyInstance, o: RouteOptions): void {
     const status: WorkflowStatus = { configured: true, enabled: o.enabled, available: o.enabled && tenantEnabled, stage: o.stage, version: o.version };
     return status;
   });
+
+  app.get(`${prefix}/workflows/meta`, {
+    attachValidation: true,
+    schema: { querystring: { type: 'object', additionalProperties: false, properties: { scopeType: { type: 'string', minLength: 1 }, scopeId: { type: 'string', minLength: 1 } } } },
+  }, async req => handle(req, false, async (tx, actor) => {
+    if (!o.enabled) throw fail(404, 'module-disabled', 'Workflows sind in dieser Umgebung ausgeschaltet.');
+    const q = req.query as { scopeType?: string; scopeId?: string };
+    if ((q.scopeType === undefined) !== (q.scopeId === undefined)) throw fail(422, 'invalid', 'Bitte «scopeType» und «scopeId» zusammen angeben.');
+    const scope: ScopeRef = q.scopeType && q.scopeId ? { type: q.scopeType, id: q.scopeId } : o.tenantScope;
+    await need(tx, actor, 'workflow:read', scope);
+    const subjectTypes = [];
+    for (const s of o.subjects) subjectTypes.push({ type: s.type, label: s.label, fields: await s.fields(tx, scope) });
+    const meta: WorkflowMeta = {
+      stage: o.stage,
+      events: [
+        ...o.events.map(e => ({ type: e.type, label: e.label, description: e.description ?? null, subjectType: e.subjectType ?? null, filterFields: e.filterFields ?? [], builtin: false })),
+        ...WORKFLOW_EVENT_TYPES.map(e => ({ type: e.type, label: e.description, description: null, subjectType: null, filterFields: [], builtin: true })),
+      ],
+      actions: o.actions.map(a => ({ key: a.key, label: a.label, group: a.group, input: a.input, output: a.output ?? null })),
+      subjectTypes,
+      stateFields: o.stateFields.map(f => ({ subjectType: f.subjectType, key: f.key, label: f.label })),
+      fieldKinds: o.fields.map(f => ({ key: f.key, label: f.label, valueSchema: f.valueSchema })),
+      stepKinds: STEP_KINDS.filter(k => !['task', 'approval', 'subflow'].includes(k)),
+      operators: [...CONDITION_OPS], unaryOperators: [...UNARY_OPS], formatters: [...FORMATTERS],
+      canActAs: typeof host.canActAs === 'function',
+    };
+    return meta;
+  }));
 
   const settingsJson = async (tx: Tx, s: TenantSettings) => {
     const usage = (await tx.query<{ runs: number; runs_rejected: number; steps: number; http_calls: number }>(

@@ -56,6 +56,10 @@ folgen die Angaben für die Entwickler der App.
   `WorkflowJobPayload`, `invalidateTriggers`, `stageProblems`, `chainDecision`, `effectiveLimits`, `redact`,
   `definitionChecksum`, `StepFailure`.
 - Optionen `tenantScope`, `triggerCacheMs`, `retryDelayMs`, `clock`.
+- Route `GET /workflows/meta` (Recht `workflow:read`, Typ `WorkflowMeta`): angemeldete Ereignistypen (mit
+  Filterfeldern, dazu die des Baukastens), Aktionen mit Ein-/Ausgabe-Schema, Bezugstypen mit Feldern im angefragten
+  Bereich, Zustandsfelder, Feldarten, ausführbare Schrittarten, Vergleiche, Formatierer, `canActAs` – für den Editor
+  von `@vollholz/workflow-web`.
 
 ### Geändert
 

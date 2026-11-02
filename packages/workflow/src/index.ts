@@ -32,7 +32,7 @@ export {
   redact, stageProblems, stepLimitReached,
   type DryRunResult, type DryRunStep, type RunState, type RunTrigger, type StepError, type TenantSettings, type TriggerKind,
 } from './engine.ts';
-export type { WorkflowStatus } from './routes.ts';
+export type { WorkflowMeta, WorkflowStatus } from './routes.ts';
 
 /** Version des Pakets (gleich wie in package.json, geprüft im Test). */
 export const WORKFLOW_PACKAGE_VERSION = '0.2.0';
@@ -154,7 +154,8 @@ export function workflow(o: WorkflowOptions): Workflow {
   const plugin: FastifyPluginAsync = async app => {
     registerRoutes(app, {
       engine, host: o.host, schema: o.schema, prefix, enabled, stage: WORKFLOW_STAGE, version: WORKFLOW_PACKAGE_VERSION,
-      tenantScope: o.tenantScope ?? { type: 'tenant', id: '*' }, subjects: o.subjects, validate,
+      tenantScope: o.tenantScope ?? { type: 'tenant', id: '*' }, subjects: o.subjects, actions: o.actions, events: o.events,
+      stateFields: o.stateFields ?? [], fields: o.fields ?? [], validate,
     });
   };
 

@@ -9,10 +9,11 @@ Zustandsmodelle, Warteschlangen):
 
 - `packages/workflow` → `@vollholz/workflow`: Ports, Definition (JSON-Schema + Prüfung), Ausdrücke, Engine für
   Automationen, Migrationen (PostgreSQL, RLS), Job-Handler, Fastify-5-Plugin mit REST-Routen.
-- `packages/workflow-web` → `@vollholz/workflow-web`: React-19-Provider und Bausteine.
+- `packages/workflow-web` → `@vollholz/workflow-web`: React-19-Provider, Daten-Hooks (TanStack Query) und Bausteine.
 
 Stand: **Stufe 1** (Automation) im Backend (`@vollholz/workflow` 0.2.0): Engine, Migration `workflow_001_core.sql`,
-Jobs `workflow.step`/`workflow.start`, `tick`, Routen. `workflow-web` ist noch auf Stufe 0 (eigene Stufe folgt);
+Jobs `workflow.step`/`workflow.start`, `tick`, Routen (mit `GET /workflows/meta` für den Editor). `workflow-web` 0.2.0
+setzt die Oberfläche der Stufe 1 um (Liste, Editor, Protokoll, Einstellungen, Leiste am Bezug);
 `checkTransition` erlaubt jeden Wechsel (Stufe 4). Konzept: «Workflows als Baukasten» (Nr. 118) im Repository der ersten App
 (`docs/konzepte/workflow-baukasten.md`); Abschnitte 6a (Schnitt Paket ↔ App), 8.2 (Ports), 13 (Stufen) sind massgebend.
 
@@ -29,7 +30,7 @@ Ereignis, Aktion (`WorkflowAction`), Zustandsfeld (`StateField`), Team (`TeamRef
 Fachliche kommt über Ports und Registrierungen; Adapter entstehen auf der Seite der App.
 
 `scripts/boundaries.ts` (`npm run boundaries`, Teil von `npm run check`) prüft das: erlaubte Importe je Paket,
-`workflow-web` nur Typen aus `@vollholz/workflow`, keine relativen Importe über die Paketgrenze, Begriffsliste `TERMS`
+`workflow-web` nur `react`, `react-dom`, `@tanstack/react-query` und Typen aus `@vollholz/workflow`, keine relativen Importe über die Paketgrenze, Begriffsliste `TERMS`
 in `src`. Neue Abhängigkeit → Regel in `ALLOWED` bewusst erweitern, nie die Begriffsliste aufweichen.
 
 ## Befehle
@@ -98,8 +99,15 @@ Pfade nur über eigene Eigenschaften, `__proto__`/`prototype`/`constructor` gesp
 
 ### Oberfläche
 
-`workflow-web` spricht mit dem Backend nur über HTTP. `WorkflowProvider` verlangt `api`, `me`, `can`; `subjects` und
-`fields` sind optional. Kein Quellmodul importiert CSS: Der Build kopiert `src/styles.css` nach `dist`.
+`workflow-web` spricht mit dem Backend nur über HTTP; die Typen in `src/types.ts` beschreiben das JSON der Routen (kein
+Import aus dem Backend nötig). `WorkflowProvider` verlangt `api`, `me`, `can`; optional `prefix`, `subjects` (mit
+`search`), `fields`, `actors`, `scopeLabel`, `components` (ersetzbare Grundbausteine), `queryClient`. Daten über
+TanStack Query (`src/api.ts`, Peer; ohne QueryClient der App ein eigener). Aufbau: `editor.tsx` (Kopf, Aktivieren,
+Probelauf), `steps.tsx` (Schrittkarten), `trigger.tsx`, `conditions.tsx`, `placeholders.tsx` (Kontext mit
+Bezeichnungen), `forms.tsx` (Formular aus JSON-Schema bzw. `FieldDef`), `WorkflowList.tsx`, `RunLog.tsx`,
+`SettingsPanel.tsx`, `SubjectWorkflowBar.tsx`. Texte in Du-Form; die Begriffsliste `TERMS` gilt auch hier (z. B. kein
+«Einheit», kein `credentials`, keine `*HTMLAttributes`-Typen – `ComponentPropsWithRef` nehmen). Kein Quellmodul
+importiert CSS: Der Build kopiert `src/styles.css` nach `dist`.
 
 ## TypeScript-Konventionen
 
@@ -119,7 +127,9 @@ Parameter-Properties. Relative Imports tragen die Endung `.ts`/`.tsx`. Der Build
   übersprungen; lokal z. B. `docker run -d --rm -p 55432:5432 -e POSTGRES_PASSWORD=test postgres:17` und
   `TEST_POSTGRES_URL=postgres://postgres:test@localhost:55432/postgres npm test -w @vollholz/workflow`. CI startet
   PostgreSQL als Service.
-- `workflow-web/test/components.test.tsx`: Provider und Bausteine.
+- `workflow-web/test/*.test.tsx` (Vitest, jsdom, `mockFetch` in `test/utils.tsx`): Provider (`components`), Liste
+  (`list`), Editor (`editor`: Schema-Formular, Wenn/Sonst, Prüfung, Konflikt, Aktivieren, Probelauf), Protokoll,
+  Einstellungen und Leiste am Bezug (`runs`).
 - `scripts/*.test.ts`: Release-Notes-Prüfung und Grenzen.
 
 ## Versionen und Release

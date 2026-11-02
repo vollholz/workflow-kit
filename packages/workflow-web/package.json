@@ -1,6 +1,6 @@
 {
   "name": "@vollholz/workflow-web",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Oberfläche zu @vollholz/workflow (React): Provider und Bausteine für Editor, Arbeitsliste, Warteschlangen, Fälle, Protokoll",
   "type": "module",
   "license": "Apache-2.0",
@@ -19,12 +19,15 @@
     "test": "vitest run"
   },
   "peerDependencies": {
+    "@tanstack/react-query": "^5.90.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@tanstack/react-query": "5.104.3",
     "@testing-library/jest-dom": "7.0.1",
     "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.8",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.2",

@@ -1,8 +1,9 @@
 /**
- * Bausteine der Oberfläche (Konzept Abschnitt 10). Stufe 0: Die Angaben jedes Bausteins stehen schon fest, damit eine
- * App ihn einbinden kann; bis zu seiner Stufe zeigt er nur den Hinweis «noch nicht verfügbar».
+ * Bausteine späterer Stufen (Konzept Abschnitt 13): Ihre Angaben stehen schon fest, damit eine App sie einbinden kann;
+ * bis zu ihrer Stufe zeigen sie nur den Hinweis «noch nicht verfügbar». Aufgaben und Warteschlangen folgen in Stufe 2,
+ * Fälle in Stufe 3.
  */
-import { useWorkflow, type WorkflowSubjectRef } from './provider.tsx';
+import { useWorkflow } from './provider.tsx';
 
 function Unavailable({ name, title }: { name: string; title: string }) {
   useWorkflow();
@@ -14,38 +15,20 @@ function Unavailable({ name, title }: { name: string; title: string }) {
   );
 }
 
-/** Editor eines Workflows als Schrittliste. */
-export interface StepListEditorProps { workflowId?: string }
-export function StepListEditor(_props: StepListEditorProps) {
-  return <Unavailable name="StepListEditor" title="Workflow bearbeiten" />;
-}
-
-/** «Meine Arbeit»: Aufgaben der Person und ihres Teams. */
+/** «Meine Arbeit»: Aufgaben der Person und ihres Teams (Stufe 2). */
 export interface MyWorkProps { filter?: 'mine' | 'team' | 'all' }
 export function MyWork(_props: MyWorkProps) {
   return <Unavailable name="MyWork" title="Meine Arbeit" />;
 }
 
-/** Warteschlange mit Aufgaben, Filtern und Massenaktionen. */
+/** Warteschlange mit Aufgaben, Filtern und Massenaktionen (Stufe 2). */
 export interface QueueViewProps { queueId: string }
 export function QueueView(_props: QueueViewProps) {
   return <Unavailable name="QueueView" title="Warteschlange" />;
 }
 
-/** Fall mit Phasen, Aufgaben, Bezügen und Verlauf. */
+/** Fall mit Phasen, Aufgaben, Bezügen und Verlauf (Stufe 3). */
 export interface CaseViewProps { caseId: string }
 export function CaseView(_props: CaseViewProps) {
   return <Unavailable name="CaseView" title="Fall" />;
-}
-
-/** Protokoll der Läufe und Schritte. */
-export interface RunLogProps { workflowId?: string; runId?: string }
-export function RunLog(_props: RunLogProps) {
-  return <Unavailable name="RunLog" title="Protokoll" />;
-}
-
-/** Leiste an einem Bezug: Zustandswechsel, manuelle Auslöser, offene Aufgaben und Fälle. */
-export interface SubjectWorkflowBarProps { subject: WorkflowSubjectRef }
-export function SubjectWorkflowBar(_props: SubjectWorkflowBarProps) {
-  return <Unavailable name="SubjectWorkflowBar" title="Workflows" />;
 }

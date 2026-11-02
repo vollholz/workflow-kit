@@ -104,6 +104,7 @@ aktuellen Rechte des Akteurs des Workflows (W6); fehlt ein Recht, entsteht ein V
 | Methode und Pfad | Recht | Zweck |
 |---|---|---|
 | `GET /workflows/status` | angemeldet | `{ configured, enabled, available, stage, version }` |
+| `GET /workflows/meta` | `workflow:read` (am Bereich `scopeType`/`scopeId`, sonst `tenantScope`) | Für den Editor: `{ stage, events, actions, subjectTypes (mit fields), stateFields, fieldKinds, stepKinds, operators, unaryOperators, formatters, canActAs }` (Typ `WorkflowMeta`) |
 | `GET`, `PUT /workflows/settings` | `workflow:admin` | Opt-in des Mandanten, Grenzen (nur senken), Zähler des Tages |
 | `GET /workflows` · `POST /workflows` | `workflow:read` · `workflow:manage` | Liste (Filter `state`, `scopeType`, `scopeId`) · Entwurf anlegen |
 | `GET`, `PUT`, `DELETE /workflows/:id` | `workflow:read` · `workflow:manage` | Entwurf lesen, ändern (`If-Match`), löschen (nur nie aktiv) |
@@ -117,8 +118,8 @@ aktuellen Rechte des Akteurs des Workflows (W6); fehlt ein Recht, entsteht ein V
 | `GET /workflow-runs/:id` | `workflow:read` | Lauf mit Schrittprotokoll |
 | `POST /workflow-runs/:id/retry`, `/skip`, `/cancel` | `workflow:operate` | Vorfall lösen |
 
-Ausser Status und Einstellungen antworten alle Routen `404 module-disabled`, solange das Modul in der Umgebung oder im
-Mandanten ausgeschaltet ist. Fehler nur über `host.error` (deutsche Texte). Jede Änderung geht ins Audit; Aktivieren,
+Ausser Status, Meta und Einstellungen antworten alle Routen `404 module-disabled`, solange das Modul in der Umgebung oder
+im Mandanten ausgeschaltet ist (Meta und Einstellungen nur, wenn es in der Umgebung ausgeschaltet ist). Fehler nur über `host.error` (deutsche Texte). Jede Änderung geht ins Audit; Aktivieren,
 Pausieren, Archivieren und Läufe melden `workflow.*` über `host.emit`.
 
 ## Exporte

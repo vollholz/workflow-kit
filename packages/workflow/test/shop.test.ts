@@ -11,7 +11,7 @@ import Fastify from 'fastify';
 import {
   DEFAULT_LIMITS, WORKFLOW_EVENT_TYPES, WORKFLOW_PACKAGE_VERSION, workflow, workflowPermissions,
   type ActorRef, type AuditEntry, type EventSource, type Notice, type StateField, type Tx, type WorkflowAction,
-  type WorkflowHost, type WorkflowOptions, type WorkflowStatus, type WorkflowSubject,
+  type WorkflowHost, type WorkflowMeta, type WorkflowOptions, type WorkflowStatus, type WorkflowSubject,
 } from '../src/index.ts';
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -141,6 +141,30 @@ test('shop bindet den Baukasten ein: Status-Route mit Anmeldung der App', async 
     assert.deepEqual(body, { configured: true, enabled: true, available: false, stage: 1, version: WORKFLOW_PACKAGE_VERSION });
     const anon = await app.inject({ method: 'GET', url: '/v1/workflows/status' });
     assert.equal(anon.statusCode, 401, 'Fehler der App');
+  } finally { await app.close(); }
+});
+
+test('Meta-Route: angemeldete Ereignisse, Aktionen und Bezugstypen für den Editor', async () => {
+  const s = shop();
+  const app = Fastify();
+  app.setErrorHandler((e, _req, reply) => { void reply.status(e instanceof HttpError ? e.status : 500).send({ title: e instanceof Error ? e.message : 'Fehler' }); });
+  await app.register(workflow(s.options).plugin);
+  try {
+    const r = await app.inject({ method: 'GET', url: '/v1/workflows/meta?scopeType=shop&scopeId=zurich', headers: { 'x-user': 'anna' } });
+    assert.equal(r.statusCode, 200, r.body);
+    const meta = r.json<WorkflowMeta>();
+    assert.deepEqual(meta.events.filter(e => !e.builtin).map(e => [e.type, e.label, e.subjectType]), [['order.created', 'Bestellung eingegangen', 'order'], ['order.updated', 'Bestellung geändert', 'order']]);
+    assert.equal(meta.events.filter(e => e.builtin).length, WORKFLOW_EVENT_TYPES.length);
+    assert.deepEqual(meta.actions.map(a => [a.key, a.label, a.group]), [['order.cancel', 'Bestellung stornieren', 'Bestellungen']]);
+    assert.deepEqual(meta.actions[0]!.input.required, ['order', 'reason']);
+    assert.deepEqual(meta.subjectTypes.map(t => [t.type, t.label, t.fields.map(f => f.key)]), [['order', 'Bestellung', ['customer', 'total', 'state']]]);
+    assert.deepEqual(meta.stateFields, [{ subjectType: 'order', key: 'state', label: 'Zustand' }]);
+    assert.deepEqual(meta.fieldKinds.map(f => f.key), ['shop']);
+    assert.deepEqual(meta.stepKinds, ['action', 'if', 'foreach', 'wait', 'end', 'set']);
+    assert.ok(meta.operators.includes('isSet') && meta.unaryOperators.includes('isSet') && meta.formatters.includes('date'));
+    assert.equal(meta.canActAs, false);
+    assert.equal((await app.inject({ method: 'GET', url: '/v1/workflows/meta', headers: { 'x-user': 'bot' } })).statusCode, 403, 'ohne workflow:read');
+    assert.equal((await app.inject({ method: 'GET', url: '/v1/workflows/meta?scopeType=shop', headers: { 'x-user': 'anna' } })).statusCode, 422);
   } finally { await app.close(); }
 });
 
