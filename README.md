@@ -7,15 +7,19 @@ einbindet; ohne Baukasten läuft sie unverändert weiter.
 
 | Paket | Inhalt |
 |---|---|
-| [`@vollholz/workflow`](packages/workflow) | Ports, Definition (JSON-Schema, Prüfung), Ausdrücke ohne Skripte, Fastify-Plugin; später Engine, Migrationen, Job-Handler |
-| [`@vollholz/workflow-web`](packages/workflow-web) | React-Provider und Bausteine (`StepListEditor`, `MyWork`, `QueueView`, `CaseView`, `RunLog`, `SubjectWorkflowBar`) |
+| [`@vollholz/workflow`](packages/workflow) | Ports, Definition (JSON-Schema, Prüfung), Ausdrücke ohne Skripte, Engine für Automationen, Migrationen (PostgreSQL, RLS), Job-Handler, Fastify-Plugin |
+| [`@vollholz/workflow-web`](packages/workflow-web) | React-Provider, Daten-Hooks und Bausteine (`WorkflowList`, `StepListEditor`, `RunLog`, `SettingsPanel`, `SubjectWorkflowBar`; später `MyWork`, `QueueView`, `CaseView`) |
 
-## Stand: Stufe 0 (Gerüst)
+## Stand: Stufe 1 (Automation, Backend)
 
-Ports, Definitionsschema, Ausdrücke, Rechte- und Ereignisliste stehen; eine App kann ihre Einbindung fertig bauen.
-`dispatch` und `checkTransition` tun noch nichts, es gibt noch keine Tabellen, Jobs oder Routen ausser
-`GET <prefix>/workflows/status`; die Bausteine der Oberfläche zeigen «noch nicht verfügbar». Engine und Datenbank
-folgen ab Stufe 1 (Automation), dann Aufgaben und Warteschlangen (2), Fälle (3), Zustandsmodelle (4).
+`@vollholz/workflow` 0.2.0 führt Automationen aus: Auslöser Ereignis (`dispatch` im Schreibpfad der App), Zeitplan
+(`tick`, Cron mit Zeitzone) und manuell; Schritte Aktion, Wenn/Sonst, Für jedes, Warten, Variablen, Ende; ein Schritt je
+Job und Transaktion, Protokoll je Schritt, Wiederholung und Vorfall, Schleifenschutz über die Kettentiefe, Grenzen je
+Mandant, Probelauf ohne Schreiben, Opt-in je Mandant. Tabellen `workflow_*` mit RLS (Mandant und Bezug), REST-Routen für
+Entwürfe, Versionen, Läufe und Vorfälle, dazu `GET /workflows/meta` für den Editor. `checkTransition` erlaubt noch
+jeden Wechsel. `@vollholz/workflow-web` 0.2.0 bringt die Oberfläche dazu: Liste, Editor als Schrittliste mit Live-Prüfung
+und Probelauf, Protokoll mit Vorfällen, Einstellungen, Leiste am Bezug. Danach folgen Aufgaben und Warteschlangen (2),
+Fälle (3), Zustandsmodelle (4).
 
 ## App-agnostisch
 
@@ -34,7 +38,7 @@ App bedeuten, legt die App fest.
 | Feldart | `FieldKind` – zusätzliche Feldarten für Aufgabenformulare |
 
 `npm run boundaries` (Teil von `npm run check`) setzt die Regeln durch: `@vollholz/workflow` importiert nur `node:*`,
-`fastify` und `ajv`, nie `@vollholz/*`; `@vollholz/workflow-web` importiert vom Backend höchstens Typen; der Code
+`fastify` und `ajv`, nie `@vollholz/*`; `@vollholz/workflow-web` importiert nur React, TanStack Query und vom Backend höchstens Typen; der Code
 beider Pakete enthält keine Namen von Apps und keine Fachbegriffe einer App. Den Nachweis führt der Test
 `packages/workflow/test/shop.test.ts`: eine Mini-App «shop» mit Bestellungen und Zustandsfeld, deren Host im Speicher
 lebt.
@@ -48,28 +52,36 @@ import { workflow, workflowPermissions } from '@vollholz/workflow';
 
 const wf = workflow({
   schema: 'app',                 // Datenbank-Schema der App für die Tabellen workflow_*
-  host,                          // WorkflowHost: actor, active, can, members, audit, emit, jobs, notify?, http?, error
+  host,                          // WorkflowHost: tx, actor, active, can, canActAs?, members, audit, emit, jobs, notify?, http?, error
   subjects: [orderSubject],      // WorkflowSubject je Bezugstyp
   actions: [cancelOrder],        // WorkflowAction der App
   events: EVENT_SOURCES,         // EventSource: Ereignistypen der App
   stateFields: [orderState],     // StateField (optional)
 });
-await app.register(wf.plugin);   // Routen unter /v1
-// im Schreibpfad der App:  emit(…) → await wf.dispatch(tx, event)
+await app.register(wf.plugin);   // Routen unter /v1 (Workflows, Versionen, Läufe, Vorfälle, Einstellungen)
+// im Schreibpfad der App:  emit(…) → await wf.dispatch(tx, event, { tenantId })
 // vor dem Schreiben eines Zustandsfelds:  await wf.checkTransition(tx, actor, subject, field, from, to, values)
-// Jobs:  wf.jobs in die Job-Warteschlange der App hängen; Migrationen:  wf.migrations({ schema, appRole, schedRole })
+// Jobs:  wf.jobs in die Job-Warteschlange der App hängen; Worker:  wf.tick(tx) jede Minute
+// Migrationen:  wf.migrations({ schema, appRole, schedRole, tenantExpr, principalExpr }), danach in der App
+//   SELECT <schema>.workflow_subjects('{"order": "<schema>.sales_order"}')
 // Rechte:  workflowPermissions ins Rechtemodell der App übernehmen
+// Einzelheiten: packages/workflow/README.md
 ```
 
 Oberfläche (React):
 
 ```tsx
-import { WorkflowProvider, MyWork } from '@vollholz/workflow-web';
+import { StepListEditor, SubjectWorkflowBar, WorkflowList, WorkflowProvider } from '@vollholz/workflow-web';
 import '@vollholz/workflow-web/styles.css';
 
-<WorkflowProvider api={{ baseUrl: '/v1' }} me={me} can={can} subjects={{ order: { label: 'Bestellung' } }}>
-  <MyWork />
+// Peer: @tanstack/react-query 5 (QueryClientProvider der App wird genutzt, sonst ein eigener)
+<WorkflowProvider api={{ headers: () => ({ 'X-CSRF-Token': csrf }) }} me={me} can={can}
+  subjects={{ order: { label: 'Bestellung', search: q => searchOrders(q), href: id => `/orders/${id}` } }}>
+  <WorkflowList onOpen={id => navigate(`/workflows/${id}`)} />
+  <StepListEditor workflowId={id} />
+  <SubjectWorkflowBar subject={{ type: 'order', id }} />
 </WorkflowProvider>
+// Einzelheiten: packages/workflow-web/README.md
 ```
 
 Abschalten: im Build das Paket weglassen (Hooks bleiben leer), zur Laufzeit `workflow({ …, enabled: false })`.

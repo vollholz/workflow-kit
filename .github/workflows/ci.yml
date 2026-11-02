@@ -1,5 +1,5 @@
-# CI: Release Notes (CHANGELOG.md je Paket zur Version), Typprüfung, Build, Tests beider Pakete, Grenzen der Pakete
-# (app-agnostisch). Ab Stufe 1 kommen Datenbank-Tests gegen PostgreSQL im Service-Container dazu.
+# CI: Release Notes (CHANGELOG.md je Paket zur Version), Typprüfung, Build, Tests beider Pakete (Datenbank-Tests gegen
+# PostgreSQL im Service-Container), Grenzen der Pakete (app-agnostisch).
 name: CI
 
 on:
@@ -20,6 +20,18 @@ jobs:
     name: Typprüfung, Build, Tests und Grenzen
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-superuser
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      # Nur Wegwerf-Werte für die Test-Datenbank im Service-Container
+      TEST_POSTGRES_URL: postgres://postgres:ci-superuser@localhost:5433/postgres
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.0.0

@@ -1,7 +1,7 @@
 {
   "name": "@vollholz/workflow",
-  "version": "0.1.0",
-  "description": "App-agnostischer Workflow-Baukasten: Ports, Definitionen, Ausdrücke, Fastify-Plugin (Engine folgt)",
+  "version": "0.2.0",
+  "description": "App-agnostischer Workflow-Baukasten: Ports, Definitionen, Ausdrücke, Engine für Automationen, Migrationen (PostgreSQL, RLS), Fastify-Plugin",
   "type": "module",
   "license": "Apache-2.0",
   "repository": { "type": "git", "url": "https://github.com/vollholz/workflow-kit.git", "directory": "packages/workflow" },
@@ -10,7 +10,7 @@
     ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
     "./package.json": "./package.json"
   },
-  "files": ["dist", "README.md", "CHANGELOG.md", "LICENSE", "NOTICE"],
+  "files": ["dist", "migrations", "README.md", "CHANGELOG.md", "LICENSE", "NOTICE"],
   "publishConfig": { "registry": "https://npm.pkg.github.com" },
   "scripts": {
     "build": "node scripts/build.ts",
@@ -24,6 +24,8 @@
     "fastify": "^5.0.0"
   },
   "devDependencies": {
-    "fastify": "5.12.6"
+    "@types/pg": "8.23.1",
+    "fastify": "5.12.6",
+    "pg": "8.23.1"
   }
 }

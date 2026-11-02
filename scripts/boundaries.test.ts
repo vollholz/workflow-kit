@@ -29,7 +29,8 @@ test('workflow: kein @vollholz/*, nur erlaubte Abhängigkeiten', () => {
 });
 
 test('workflow-web: Backend nur als Typ', () => {
-  assert.deepEqual(checkFile('workflow-web', 'src', src('workflow-web', 'x.tsx'), "import type { ActorRef } from '@vollholz/workflow';\nimport { useMemo } from 'react';"), []);
+  assert.deepEqual(checkFile('workflow-web', 'src', src('workflow-web', 'x.tsx'), "import type { ActorRef } from '@vollholz/workflow';\nimport { useMemo } from 'react';\nimport { useQuery } from '@tanstack/react-query';"), []);
+  assert.match(checkFile('workflow-web', 'src', src('workflow-web', 'x.tsx'), "import axios from 'axios';")[0]!.message, /nicht erlaubte Abhängigkeit/);
   assert.match(checkFile('workflow-web', 'src', src('workflow-web', 'x.tsx'), "import { workflow } from '@vollholz/workflow';")[0]!.message, /nur Typen erlaubt/);
   assert.match(checkFile('workflow-web', 'src', src('workflow-web', 'x.tsx'), "import x from '../../workflow/src/index.ts';")[0]!.message, /hinaus/);
 });

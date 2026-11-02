@@ -110,12 +110,22 @@ export interface JobsPort {
 
 /** Was die App dem Baukasten bereitstellt. */
 export interface WorkflowHost {
+  /**
+   * Transaktion im Mandantenkontext der Anfrage (die App setzt Rolle und Kontext für RLS); alle Routen des Baukastens
+   * lesen und schreiben nur darin. Wirft den Fehler der App, wenn niemand angemeldet ist.
+   */
+  tx<T>(req: unknown, fn: (tx: Tx) => Promise<T>): Promise<T>;
   /** Wer die Anfrage stellt (aus dem Request der App); wirft den Fehler der App, wenn niemand angemeldet ist. */
   actor(req: unknown): ActorRef;
   /** Ist der Akteur noch handlungsfähig? false = nicht mehr Mitglied oder gesperrt → Workflow pausieren. */
   active(tx: Tx, actor: ActorRef): Promise<boolean>;
   /** Recht des Akteurs prüfen; Rechtenamen aus `workflowPermissions` oder `WorkflowAction.needs`. */
   can(tx: Tx, actor: ActorRef, perm: string, on: ScopeRef | SubjectRef): Promise<boolean>;
+  /**
+   * Darf `actor` einen Workflow im Namen von `target` aktivieren (W6, z. B. einen Maschinen-Client, den die Person
+   * verwalten darf)? Ohne diese Methode kann nur die aktivierende Person selbst Akteur werden.
+   */
+  canActAs?(tx: Tx, actor: ActorRef, target: ActorRef): Promise<boolean>;
   /** Mitglieder eines Teams (Warteschlange, Genehmigung); was ein Team ist, entscheidet die App. */
   members(tx: Tx, team: TeamRef): Promise<ActorRef[]>;
   audit(tx: Tx, entry: AuditEntry): Promise<void>;
@@ -217,6 +227,8 @@ export interface ActionContext {
   /** `run_id:path:attempt` – für Aufrufe nach aussen. */
   idempotencyKey: string;
   dryRun: boolean;
+  /** Zeile ins Schrittprotokoll schreiben (gekürzt, höchstens 50 je Schritt). */
+  log(message: string): void;
 }
 
 /** Fachliche Aktion, die eine App anmeldet. */
@@ -246,8 +258,28 @@ export interface WorkflowLimits {
   runsPerSubjectPerMinute: number;
 }
 
+/** Herkunft eines Ereignisses aus einem Lauf (Schleifenschutz): Lauf und dessen Kettentiefe. */
+export interface Causation {
+  runId: string;
+  /** Kettentiefe des auslösenden Laufs (1 = von einem Ereignis ausserhalb eines Workflows gestartet). */
+  depth: number;
+}
+
+export interface DispatchOptions {
+  /**
+   * Mandant der Transaktion. Mit Angabe kostet `dispatch` ohne passende Auslöser keine Abfrage; ohne Angabe liest das
+   * Paket den Mandanten einmal je Transaktion aus der Datenbank (`<schema>.workflow_tenant()`).
+   */
+  tenantId?: string;
+  /**
+   * Ereignis stammt aus einem Lauf. Nur nötig, wenn die Kette über eine andere Transaktion läuft (Webhook, Abgleich);
+   * Ereignisse, die eine Aktion in ihrer Transaktion (`ActionContext.tx`) auslöst, erkennt das Paket selbst.
+   */
+  causedBy?: Causation;
+}
+
 /** Ereignis an die Engine weiterreichen; die App ruft das in derselben Transaktion wie `emit` auf (W3). */
-export type Dispatch = (tx: Tx, event: WorkflowEvent) => Promise<void>;
+export type Dispatch = (tx: Tx, event: WorkflowEvent, o?: DispatchOptions) => Promise<void>;
 
 /** Ergebnis einer Prüfung eines Zustandswechsels. */
 export type TransitionCheck =
@@ -260,12 +292,20 @@ export type CheckTransition = (
   values?: Record<string, unknown>,
 ) => Promise<TransitionCheck>;
 
-/** Kontext eines Jobs des Baukastens. */
+/**
+ * Kontext eines Jobs des Baukastens. Die App führt jeden Job in einer Transaktion mit dem Mandantenkontext von
+ * `payload.tenantId` aus (Laufzeit-Rolle, wie eine Anfrage ohne angemeldete Person).
+ */
 export interface JobCtx {
   tx: Tx;
   payload: unknown;
   attempt: number;
 }
+
+/** Nutzlast der Jobs des Baukastens; `tenantId` trägt jeder Job. */
+export type WorkflowJobPayload =
+  | { tenantId: string; runId: string; seq: number }
+  | { tenantId: string; triggerId: string; at: string };
 
 export interface WorkflowJob {
   kind: string;
@@ -286,4 +326,8 @@ export interface MigrationOptions {
   appRole: string;
   /** Rolle des Workers. */
   schedRole: string;
+  /** SQL-Ausdruck für den Mandanten der Anfrage (Standard `app.tenant_id()`); Typ `uuid`. */
+  tenantExpr?: string;
+  /** SQL-Ausdruck für die angemeldete Person (Standard `app.principal_id()`). */
+  principalExpr?: string;
 }

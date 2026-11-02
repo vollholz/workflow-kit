@@ -3,8 +3,9 @@
  *
  * - `packages/workflow/src`: nur relative Importe innerhalb von `src`, `node:*`, `fastify` und `ajv`. Kein
  *   `@vollholz/*`, kein App-Paket.
- * - `packages/workflow-web/src`: nur relative Importe innerhalb von `src`, `react`, `react-dom`; vom Backend-Paket
- *   `@vollholz/workflow` höchstens Typen (`import type`), nie dessen Laufzeit.
+ * - `packages/workflow-web/src`: nur relative Importe innerhalb von `src`, `react`, `react-dom` und
+ *   `@tanstack/react-query` (Peer, wie bei den übrigen Oberflächen-Paketen); vom Backend-Paket `@vollholz/workflow`
+ *   höchstens Typen (`import type`), nie dessen Laufzeit.
  * - Tests und Skripte der Pakete: kein `@vollholz/*` ausser den Paketen dieses Repos, kein Import aus einem anderen
  *   Paket über relative Pfade.
  * - `src` beider Pakete: keine Namen von Apps oder App-Paketen und keine Fachbegriffe einer App (Liste `TERMS`).
@@ -45,9 +46,10 @@ const ALLOWED: Record<string, (spec: string, typeOnly: boolean) => string | null
   },
   'workflow-web': (spec, typeOnly) => {
     if (spec === 'react' || spec.startsWith('react/') || spec === 'react-dom' || spec.startsWith('react-dom/')) return null;
+    if (spec === '@tanstack/react-query') return null;
     if (spec === '@vollholz/workflow') return typeOnly ? null : '«@vollholz/workflow»: nur Typen erlaubt (import type), nie die Laufzeit des Backends';
     if (spec.startsWith('@vollholz/')) return `«${spec}»: @vollholz/workflow-web darf kein anderes Paket @vollholz/* importieren`;
-    return `«${spec}»: nicht erlaubte Abhängigkeit (erlaubt: react, react-dom, Typen aus @vollholz/workflow)`;
+    return `«${spec}»: nicht erlaubte Abhängigkeit (erlaubt: react, react-dom, @tanstack/react-query, Typen aus @vollholz/workflow)`;
   },
 };
 

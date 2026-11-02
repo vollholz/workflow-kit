@@ -11,7 +11,7 @@ import Fastify from 'fastify';
 import {
   DEFAULT_LIMITS, WORKFLOW_EVENT_TYPES, WORKFLOW_PACKAGE_VERSION, workflow, workflowPermissions,
   type ActorRef, type AuditEntry, type EventSource, type Notice, type StateField, type Tx, type WorkflowAction,
-  type WorkflowHost, type WorkflowOptions, type WorkflowStatus, type WorkflowSubject,
+  type WorkflowHost, type WorkflowMeta, type WorkflowOptions, type WorkflowStatus, type WorkflowSubject,
 } from '../src/index.ts';
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -43,6 +43,7 @@ function shop() {
   const tx: Tx = { async query(sql) { queries.push(sql); return { rows: [] }; } };
 
   const host = {
+    async tx(_req, fn) { return fn(tx); },
     actor(req) {
       const id = (req as { headers: Record<string, string | undefined> }).headers['x-user'];
       if (!id || !people[id]) throw new HttpError(401, 'unauthenticated', 'Bitte anmelden');
@@ -137,9 +138,33 @@ test('shop bindet den Baukasten ein: Status-Route mit Anmeldung der App', async 
     const ok = await app.inject({ method: 'GET', url: '/v1/workflows/status', headers: { 'x-user': 'anna' } });
     assert.equal(ok.statusCode, 200);
     const body = ok.json<WorkflowStatus>();
-    assert.deepEqual(body, { configured: true, enabled: true, available: false, stage: 0, version: WORKFLOW_PACKAGE_VERSION });
+    assert.deepEqual(body, { configured: true, enabled: true, available: false, stage: 1, version: WORKFLOW_PACKAGE_VERSION });
     const anon = await app.inject({ method: 'GET', url: '/v1/workflows/status' });
     assert.equal(anon.statusCode, 401, 'Fehler der App');
+  } finally { await app.close(); }
+});
+
+test('Meta-Route: angemeldete Ereignisse, Aktionen und Bezugstypen für den Editor', async () => {
+  const s = shop();
+  const app = Fastify();
+  app.setErrorHandler((e, _req, reply) => { void reply.status(e instanceof HttpError ? e.status : 500).send({ title: e instanceof Error ? e.message : 'Fehler' }); });
+  await app.register(workflow(s.options).plugin);
+  try {
+    const r = await app.inject({ method: 'GET', url: '/v1/workflows/meta?scopeType=shop&scopeId=zurich', headers: { 'x-user': 'anna' } });
+    assert.equal(r.statusCode, 200, r.body);
+    const meta = r.json<WorkflowMeta>();
+    assert.deepEqual(meta.events.filter(e => !e.builtin).map(e => [e.type, e.label, e.subjectType]), [['order.created', 'Bestellung eingegangen', 'order'], ['order.updated', 'Bestellung geändert', 'order']]);
+    assert.equal(meta.events.filter(e => e.builtin).length, WORKFLOW_EVENT_TYPES.length);
+    assert.deepEqual(meta.actions.map(a => [a.key, a.label, a.group]), [['order.cancel', 'Bestellung stornieren', 'Bestellungen']]);
+    assert.deepEqual(meta.actions[0]!.input.required, ['order', 'reason']);
+    assert.deepEqual(meta.subjectTypes.map(t => [t.type, t.label, t.fields.map(f => f.key)]), [['order', 'Bestellung', ['customer', 'total', 'state']]]);
+    assert.deepEqual(meta.stateFields, [{ subjectType: 'order', key: 'state', label: 'Zustand' }]);
+    assert.deepEqual(meta.fieldKinds.map(f => f.key), ['shop']);
+    assert.deepEqual(meta.stepKinds, ['action', 'if', 'foreach', 'wait', 'end', 'set']);
+    assert.ok(meta.operators.includes('isSet') && meta.unaryOperators.includes('isSet') && meta.formatters.includes('date'));
+    assert.equal(meta.canActAs, false);
+    assert.equal((await app.inject({ method: 'GET', url: '/v1/workflows/meta', headers: { 'x-user': 'bot' } })).statusCode, 403, 'ohne workflow:read');
+    assert.equal((await app.inject({ method: 'GET', url: '/v1/workflows/meta?scopeType=shop', headers: { 'x-user': 'anna' } })).statusCode, 422);
   } finally { await app.close(); }
 });
 
@@ -154,18 +179,46 @@ test('Präfix und Laufzeit-Schalter', async () => {
   } finally { await app.close(); }
 });
 
-test('Stufe 0: dispatch und checkTransition tun nichts und schreiben nichts', async () => {
+test('dispatch kostet ohne Auslöser im Zwischenspeicher keine Abfrage; checkTransition erlaubt alles', async () => {
   const s = shop();
   const wf = workflow(s.options);
-  await wf.dispatch(s.tx, { type: 'order.updated', subject: { type: 'order', id: 'o1' }, data: { state: { from: 'new', to: 'paid' } } });
+  const event = { type: 'order.updated', subject: { type: 'order', id: 'o1' }, data: { state: { from: 'new', to: 'paid' } } };
+  await wf.dispatch(s.tx, event, { tenantId: 't1' });
+  assert.equal(s.queries.length, 1, 'einmal Einstellungen des Mandanten (keine Zeile = ausgeschaltet)');
+  const n = 20_000;
+  const t0 = performance.now();
+  for (let i = 0; i < n; i++) await wf.dispatch(s.tx, event, { tenantId: 't1' });
+  const perCall = (performance.now() - t0) / n;
+  assert.equal(s.queries.length, 1, 'danach keine Abfrage');
+  assert.ok(perCall < 0.1, `dispatch ohne Treffer ${perCall.toFixed(4)} ms je Aufruf (Ziel < 0,1 ms)`);
+  // ohne Mandant: einmal je Transaktion den Mandanten lesen (hier keiner → nichts weiter)
+  await wf.dispatch(s.tx, event);
+  await wf.dispatch(s.tx, event);
+  assert.equal(s.queries.length, 2);
+  // zur Laufzeit ausgeschaltet: gar keine Abfrage
+  const off = workflow({ ...s.options, enabled: false });
+  await off.dispatch(s.tx, event, { tenantId: 't2' });
+  assert.equal(s.queries.length, 2);
+  assert.equal(await off.tick(s.tx), 0);
   const check = await wf.checkTransition(s.tx, { id: 'anna', kind: 'person' }, { type: 'order', id: 'o1' }, 'state', 'new', 'cancelled');
   assert.deepEqual(check, { allowed: true });
-  assert.deepEqual([s.queries, s.audit, s.outbox, s.jobs, s.notices], [[], [], [], [], []]);
-  assert.deepEqual(wf.jobs, []);
-  assert.deepEqual(wf.migrations({ schema: 'shop', appRole: 'shop_app', schedRole: 'shop_worker' }), []);
-  assert.throws(() => wf.migrations({ schema: 'shop; drop', appRole: 'a', schedRole: 'b' }), /kein gültiger Bezeichner/);
+  assert.deepEqual([s.audit, s.outbox, s.jobs, s.notices], [[], [], [], []]);
+  assert.deepEqual(wf.jobs.map(j => j.kind), ['workflow.step', 'workflow.start']);
   assert.equal(wf.limits.stepsPerRun, 20);
   assert.equal(wf.limits.chainDepth, DEFAULT_LIMITS.chainDepth);
+});
+
+test('Migrationen mit Schema, Rollen und Ausdrücken der App', () => {
+  const wf = workflow(shop().options);
+  const m = wf.migrations({ schema: 'shop', appRole: 'shop_app', schedRole: 'shop_worker', tenantExpr: "current_setting('shop.tenant')::uuid" });
+  assert.deepEqual(m.map(x => x.name), ['workflow_001_core.sql']);
+  assert.match(m[0]!.checksum, /^[0-9a-f]{64}$/);
+  assert.doesNotMatch(m[0]!.sql, /\{\{\w+\}\}/, 'alle Platzhalter ersetzt');
+  assert.match(m[0]!.sql, /CREATE TABLE IF NOT EXISTS shop\.workflow_run/);
+  assert.match(m[0]!.sql, /TO shop_app USING \(tenant_id = current_setting\('shop\.tenant'\)::uuid\)/);
+  assert.match(m[0]!.sql, /TO shop_worker/);
+  assert.throws(() => wf.migrations({ schema: 'shop; drop', appRole: 'a', schedRole: 'b' }), /kein gültiger Bezeichner/);
+  assert.throws(() => wf.migrations({ schema: 'shop', appRole: 'a', schedRole: 'b', tenantExpr: '1; drop table x' }), /kein gültiger SQL-Ausdruck/);
 });
 
 test('Definition mit den Aktionen und Ereignissen der App prüfen', () => {
@@ -190,7 +243,7 @@ test('Definition mit den Aktionen und Ereignissen der App prüfen', () => {
 
 test('Aktion der App über die Ports: Recht, Probelauf, Ausführung', async () => {
   const s = shop();
-  const ctx = { tx: s.tx, host: s.host, actor: { id: 'bot', kind: 'client' } as const, run: { id: 'r1', workflowId: 'w1', version: 1 }, subject: { type: 'order', id: 'o1' }, vars: {}, idempotencyKey: 'r1:/steps/0:1', dryRun: true };
+  const ctx = { tx: s.tx, host: s.host, actor: { id: 'bot', kind: 'client' } as const, run: { id: 'r1', workflowId: 'w1', version: 1 }, subject: { type: 'order', id: 'o1' }, vars: {}, idempotencyKey: 'r1:/steps/0:1', dryRun: true, log: () => {} };
   const input = { order: 'o1', reason: 'Test' };
   for (const n of s.cancelOrder.needs!(input)) assert.equal(await s.host.can(s.tx, ctx.actor, n.perm, { type: n.resource.type, id: n.resource.id! }), true);
   assert.equal((await s.cancelOrder.dryRun!(ctx, input)).summary, 'würde Bestellung o1 stornieren');
