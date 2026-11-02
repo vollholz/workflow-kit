@@ -1,0 +1,29 @@
+{
+  "name": "@vollholz/workflow",
+  "version": "0.1.0",
+  "description": "App-agnostischer Workflow-Baukasten: Ports, Definitionen, Ausdrücke, Fastify-Plugin (Engine folgt)",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "https://github.com/vollholz/workflow-kit.git", "directory": "packages/workflow" },
+  "engines": { "node": ">=24" },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md", "CHANGELOG.md", "LICENSE", "NOTICE"],
+  "publishConfig": { "registry": "https://npm.pkg.github.com" },
+  "scripts": {
+    "build": "node scripts/build.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --test-reporter=spec \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "ajv": "8.20.0"
+  },
+  "peerDependencies": {
+    "fastify": "^5.0.0"
+  },
+  "devDependencies": {
+    "fastify": "5.12.6"
+  }
+}

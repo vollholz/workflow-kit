@@ -1,0 +1,42 @@
+# CI: Release Notes (CHANGELOG.md je Paket zur Version), Typprüfung, Build, Tests beider Pakete, Grenzen der Pakete
+# (app-agnostisch). Ab Stufe 1 kommen Datenbank-Tests gegen PostgreSQL im Service-Container dazu.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: Typprüfung, Build, Tests und Grenzen
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Release Notes (keine neue Version ohne CHANGELOG-Eintrag)
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            git fetch --no-tags --depth=1 origin "$BASE_REF"
+            node scripts/changelog.ts check --base FETCH_HEAD
+          else
+            node scripts/changelog.ts check
+          fi
+      - run: npm run check
+      - name: Pakete lassen sich packen
+        run: npm pack --workspaces --dry-run

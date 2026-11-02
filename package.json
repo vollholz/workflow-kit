@@ -1,0 +1,20 @@
+{
+  "name": "workflow-kit",
+  "private": true,
+  "type": "module",
+  "description": "App-agnostischer Baukasten für Workflows in Apps: Automationen, Fälle mit Genehmigungen, Zustandsmodelle (Engine, API, Oberfläche)",
+  "engines": { "node": ">=24" },
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present && tsc -p scripts/tsconfig.json",
+    "test": "npm test --workspaces --if-present",
+    "test:scripts": "node --test --test-reporter=spec \"scripts/*.test.ts\"",
+    "boundaries": "node scripts/boundaries.ts",
+    "check": "npm run typecheck && npm run build && npm test && npm run test:scripts && npm run boundaries"
+  },
+  "devDependencies": {
+    "@types/node": "24.9.1",
+    "typescript": "5.9.3"
+  }
+}

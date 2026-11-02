@@ -1,0 +1,12 @@
+/* Bausteine von @vollholz/workflow-web. Farben aus den Tokens der App (--surface, --muted …) oder aus --wf-*. */
+.wf-unavailable {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 1rem;
+  border: 1px dashed var(--wf-border, var(--border, #c8c8c8));
+  border-radius: 0.5rem;
+  background: var(--wf-surface, var(--surface, transparent));
+  color: var(--wf-muted, var(--muted, #6b6b6b));
+}
+.wf-unavailable strong { color: var(--wf-text, var(--text, inherit)); }

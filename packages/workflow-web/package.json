@@ -1,0 +1,37 @@
+{
+  "name": "@vollholz/workflow-web",
+  "version": "0.1.0",
+  "description": "Oberfläche zu @vollholz/workflow (React): Provider und Bausteine für Editor, Arbeitsliste, Warteschlangen, Fälle, Protokoll",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "https://github.com/vollholz/workflow-kit.git", "directory": "packages/workflow-web" },
+  "engines": { "node": ">=24" },
+  "sideEffects": ["*.css"],
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./styles.css": "./dist/styles.css"
+  },
+  "files": ["dist", "README.md", "CHANGELOG.md", "LICENSE", "NOTICE"],
+  "publishConfig": { "registry": "https://npm.pkg.github.com" },
+  "scripts": {
+    "build": "node scripts/build.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/react": "16.3.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "jsdom": "30.1.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "vite": "8.3.4",
+    "vitest": "5.0.5"
+  }
+}
