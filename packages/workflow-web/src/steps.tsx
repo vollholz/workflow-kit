@@ -1,18 +1,17 @@
 /**
- * Schrittliste des Editors (W4: Schrittliste statt Grafik): Schritte als Karten, verschachtelt für Wenn/Sonst und
- * Für jedes; je Art ein eigenes Formular (Aktion aus dem Eingabe-Schema, Bedingung, Liste, Warten, Werte, Ende).
+ * Formulare der Schritte (W4: Schrittliste statt Grafik) für den Detailbereich des Editors: je Art ein eigenes
+ * Formular (Aktion aus dem Eingabe-Schema, Bedingung, Liste, Warten, Werte, Ende, Aufgabe, Genehmigung). Die Liste
+ * selbst mit Wegen und «+» an jeder Stelle zeigt `flow.tsx`.
  *
  * Regeln:
- * - Hinzufügen, Verschieben und Entfernen mit Knöpfen (Tastatur, kein Ziehen nötig); nach dem Verschieben bleibt der
- *   Fokus auf dem Knopf des verschobenen Schritts. Vor dem Entfernen meldet die Liste den Schritt dem Editor
- *   (`onRemove`), der «Rückgängig» anbietet.
+ * - Wenn/Sonst und Für jedes zeigen hier nur ihre Bedingung bzw. Liste; ihre Schritte stehen im Ablauf.
  * - Jeder Schritt bekommt eine eindeutige ID (`s1`, `s2` …); Verweise `steps.<id>` bleiben beim Verschieben gültig.
- * - Meldungen der Prüfung (`POST /workflows/validate`) stehen an der Karte, zu der ihr Pfad gehört; Meldungen
- *   verschachtelter Schritte an deren Karte.
+ * - Meldungen der Prüfung (`POST /workflows/validate`) gehören zu dem Schritt, zu dem ihr Pfad gehört (`ownErrors`).
  * - Aufgabe und Genehmigung (Stufe 2) mit Titel, Zuständigen, Formular, Ergebnissen, Frist und Priorität bzw.
  *   Genehmigenden und Art; Unterabläufe (spätere Stufe) zeigt die Karte nur an.
  */
-import { createContext, useContext, useEffect, useId, useRef, useState } from 'react';
+import { createContext, useContext, useId } from 'react';
+import { useQueues } from './api.ts';
 import { AssigneeInput, AssigneeText, describeAssignee } from './assignee.tsx';
 import { ConditionBuilder, describeCondition } from './conditions.tsx';
 import { SchemaForm } from './forms.tsx';
@@ -27,11 +26,9 @@ export interface EditorContext {
   errors: DefinitionError[];
   readOnly: boolean;
   newId: () => string;
-  /** Wird aufgerufen, bevor ein Schritt entfernt wird (für «Rückgängig»); der Editor setzt dann den Fokus. */
-  onRemove?: (label: string) => void;
 }
 export const EditorCtx = createContext<EditorContext | null>(null);
-const useEditor = () => {
+export const useEditor = () => {
   const c = useContext(EditorCtx);
   if (!c) throw new Error('Schrittliste ohne Editor');
   return c;
@@ -42,7 +39,7 @@ export const STEP_KIND_LABEL: Record<string, string> = {
   action: 'Aktion', if: 'Wenn / Sonst', foreach: 'Für jedes', wait: 'Warten', set: 'Werte setzen', end: 'Beenden',
   task: 'Aufgabe', approval: 'Genehmigung', subflow: 'Unterablauf',
 };
-const ADDABLE: StepKindName[] = ['action', 'if', 'foreach', 'wait', 'task', 'approval', 'set', 'end'];
+export const ADDABLE: StepKindName[] = ['action', 'if', 'foreach', 'wait', 'task', 'approval', 'set', 'end'];
 
 export const kindOf = (s: Step): string => (['action', 'if', 'foreach', 'wait', 'set', 'end', 'task', 'approval', 'subflow'] as const).find(k => k in s) ?? 'unbekannt';
 
@@ -153,123 +150,24 @@ export function summary(s: Step, meta: WorkflowMetaJson | undefined, fields: Con
   if ('approval' in s) return `Genehmigung «${s.approval.title || '…'}» bei ${s.approval.approvers.map(a => describeAssignee(a)).join(', ')}`;
   return `${STEP_KIND_LABEL[kindOf(s)] ?? 'Schritt'} (folgt in einer späteren Stufe)`;
 }
-/** Zusammenfassung eines Schritts; bei Aufgabe und Genehmigung mit Namen der Zuständigen (Person, Team, Warteschlange). */
-function StepSummary({ step, meta, fields }: { step: Step; meta: WorkflowMetaJson | undefined; fields: ContextField[] }) {
+/**
+ * Zusammenfassung eines Schritts; bei Aufgabe und Genehmigung mit Namen der Zuständigen (Person, Team, Warteschlange).
+ * `short`: ohne Art und Titel (zweite Zeile im Ablauf, unter dem Titel), z. B. «für Warteschlange Support, Frist 2 Arbeitstage».
+ */
+export function StepSummary({ step, meta, fields, short }: { step: Step; meta: WorkflowMetaJson | undefined; fields: ContextField[]; short?: boolean }) {
   if ('task' in step) {
     const t = step.task;
-    return <>{`Aufgabe «${t.title || '…'}» für `}<AssigneeText value={t.assignee} />{t.due ? `, Frist ${describeDuration(t.due)}` : ''}</>;
+    return <>{short ? 'für ' : `Aufgabe «${t.title || '…'}» für `}<AssigneeText value={t.assignee} />{t.due ? `, Frist ${describeDuration(t.due)}` : ''}</>;
   }
   if ('approval' in step) {
     const a = step.approval;
-    return <>{`Genehmigung «${a.title || '…'}» bei `}{a.approvers.map((x, i) => <span key={i}>{i ? ', ' : ''}<AssigneeText value={x} /></span>)}</>;
+    return <>{short ? 'bei ' : `Genehmigung «${a.title || '…'}» bei `}{a.approvers.map((x, i) => <span key={i}>{i ? ', ' : ''}<AssigneeText value={x} /></span>)}{short ? ` · ${MODE_LABEL[a.mode]}` : ''}</>;
   }
   return <>{summary(step, meta, fields)}</>;
 }
 const END_LABEL = { completed: 'erfolgreich', cancelled: 'abgebrochen', failed: 'fehlgeschlagen' } as const;
 
-export function StepList({ steps, onChange, path, number, title }: { steps: Step[]; onChange: (s: Step[]) => void; path: string; number: string; title: string }) {
-  const ed = useEditor();
-  const { ui } = useWorkflow();
-  const [adding, setAdding] = useState(false);
-  const focus = useRef<{ id: string; dir: 'up' | 'down' } | null>(null);
-  const listRef = useRef<HTMLOListElement>(null);
-  const addRef = useRef<HTMLButtonElement>(null);
-  const menuId = useId();
-  useEffect(() => {
-    const f = focus.current;
-    if (!f) return;
-    focus.current = null;
-    const card = listRef.current?.querySelector<HTMLElement>(`[data-step-id="${f.id}"]`);
-    (card?.querySelector<HTMLButtonElement>(`[data-move="${f.dir}"]:not([disabled])`) ?? card?.querySelector<HTMLButtonElement>('[data-move]:not([disabled])'))?.focus();
-  });
-  const move = (i: number, d: -1 | 1) => {
-    const j = i + d;
-    if (j < 0 || j >= steps.length) return;
-    const next = [...steps];
-    [next[i], next[j]] = [next[j]!, next[i]!];
-    focus.current = { id: steps[i]!.id, dir: d < 0 ? 'up' : 'down' };
-    onChange(next);
-  };
-  const add = (kind: StepKindName) => {
-    const step = newStep(kind, ed.newId());
-    if ('if' in step && 'all' in step.if) step.if = { all: [{ field: ed.fields[0]?.path ?? '', op: 'eq', value: '' }] };
-    onChange([...steps, step]);
-    setAdding(false);
-  };
-  const allowed = ADDABLE.filter(k => !ed.meta || ed.meta.stepKinds.includes(k));
-  return (
-    <div className="wf-steps">
-      {steps.length ? (
-        <ol ref={listRef} className="wf-step-list" aria-label={title}>
-          {steps.map((s, i) => (
-            <li key={s.id} data-step-id={s.id}>
-              <StepCard step={s} path={`${path}/${i}`} number={`${number}${i + 1}`}
-                onChange={n => onChange(steps.map((x, j) => (j === i ? n : x)))}
-                onRemove={() => {
-                  ed.onRemove?.(`Schritt ${number}${i + 1} (${stepTitle(s, ed.meta)})`);
-                  onChange(steps.filter((_, j) => j !== i));
-                  if (!ed.onRemove) requestAnimationFrame(() => addRef.current?.focus());
-                }}
-                onUp={i > 0 ? () => move(i, -1) : undefined} onDown={i < steps.length - 1 ? () => move(i, 1) : undefined} />
-            </li>
-          ))}
-        </ol>
-      ) : <p className="wf-muted wf-small">Noch keine Schritte.</p>}
-      {!ed.readOnly ? (
-        <div className="wf-add">
-          <ui.Button ref={addRef} size="sm" aria-expanded={adding} aria-controls={adding ? menuId : undefined} onClick={() => setAdding(a => !a)}>
-            {`Schritt hinzufügen${title === 'Schritte' ? '' : ` (${title})`}`}
-          </ui.Button>
-          {adding ? (
-            <div id={menuId} className="wf-add-menu" role="group" aria-label="Art des neuen Schritts" onKeyDown={e => { if (e.key === 'Escape') { setAdding(false); addRef.current?.focus(); } }}>
-              {allowed.map((k, n) => <ui.Button key={k} size="sm" variant="ghost" autoFocus={n === 0} onClick={() => add(k)}>{STEP_KIND_LABEL[k]}</ui.Button>)}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function StepCard({ step, path, number, onChange, onRemove, onUp, onDown }: {
-  step: Step; path: string; number: string; onChange: (s: Step) => void; onRemove: () => void; onUp?: () => void; onDown?: () => void;
-}) {
-  const ed = useEditor();
-  const { ui } = useWorkflow();
-  const kind = kindOf(step);
-  const name = `Schritt ${number}`;
-  const errs = ownErrors(ed.errors, path);
-  const headId = useId();
-  return (
-    <section className={`wf-step${errs.length ? ' has-error' : ''}`} aria-labelledby={headId}>
-      <header className="wf-step-head">
-        <span className="wf-step-no" aria-hidden="true">{number}</span>
-        <div className="wf-grow">
-          <h4 id={headId}><span className="wf-sr">{`${name}:`}</span>{' '}{STEP_KIND_LABEL[kind] ?? kind}{step.label ? ` – ${step.label}` : ''}</h4>
-          <div className="wf-muted wf-small"><StepSummary step={step} meta={ed.meta} fields={ed.fields} /></div>
-        </div>
-        {!ed.readOnly ? (
-          <div className="wf-step-tools">
-            <ui.Button size="sm" variant="ghost" data-move="up" disabled={!onUp} onClick={onUp} aria-label={`${name} nach oben`}>↑</ui.Button>
-            <ui.Button size="sm" variant="ghost" data-move="down" disabled={!onDown} onClick={onDown} aria-label={`${name} nach unten`}>↓</ui.Button>
-            <ui.Button size="sm" variant="ghost" onClick={onRemove} aria-label={`${name} entfernen`}>✕</ui.Button>
-          </div>
-        ) : null}
-      </header>
-      {errs.length ? (
-        <ul className="wf-step-errors" aria-label={`Hinweise zu ${name}`}>
-          {errs.map((e, i) => <li key={i}>{e.message}</li>)}
-        </ul>
-      ) : null}
-      <fieldset className="wf-step-body" disabled={ed.readOnly} aria-label={`${name} bearbeiten`}>
-        <StepBody step={step} path={path} number={number} onChange={onChange} />
-        <CommonFields step={step} onChange={onChange} name={name} />
-      </fieldset>
-    </section>
-  );
-}
-
-function CommonFields({ step, onChange, name }: { step: Step; onChange: (s: Step) => void; name: string }) {
+export function CommonFields({ step, onChange, name }: { step: Step; onChange: (s: Step) => void; name: string }) {
   const { ui } = useWorkflow();
   const id = useId();
   const oe: OnError = step.onError ?? {};
@@ -311,7 +209,8 @@ function CommonFields({ step, onChange, name }: { step: Step; onChange: (s: Step
   );
 }
 
-function StepBody({ step, path, number, onChange }: { step: Step; path: string; number: string; onChange: (s: Step) => void }) {
+/** Formular eines Schritts; verschachtelte Schritte (Dann, Sonst, Für jeden Eintrag) zeigt der Ablauf. */
+export function StepBody({ step, number, onChange }: { step: Step; number: string; onChange: (s: Step) => void }) {
   const ed = useEditor();
   const { ui } = useWorkflow();
   const id = useId();
@@ -342,15 +241,7 @@ function StepBody({ step, path, number, onChange }: { step: Step; path: string; 
       <>
         <ConditionBuilder label={`${name}: Bedingung`} value={step.if} fields={ed.fields} disabled={ed.readOnly}
           onChange={c => onChange({ ...step, if: c ?? { all: [{ field: '', op: 'eq', value: '' }] } })} />
-        <div className="wf-branch">
-          <h5>Dann</h5>
-          <StepList steps={step.then} onChange={then => onChange({ ...step, then })} path={`${path}/then`} number={`${number}.`} title={`Dann in ${name}`} />
-        </div>
-        <div className="wf-branch">
-          <h5>Sonst</h5>
-          <StepList steps={step.else ?? []} path={`${path}/else`} number={`${number}.s`} title={`Sonst in ${name}`}
-            onChange={list => { const n = { ...step }; if (list.length) n.else = list; else delete n.else; onChange(n); }} />
-        </div>
+        <p className="wf-hint">Die Schritte für «Dann» und «Sonst» stehen im Ablauf unter diesem Schritt.</p>
       </>
     );
   }
@@ -372,10 +263,7 @@ function StepBody({ step, path, number, onChange }: { step: Step; path: string; 
               onChange={e => { const f = { ...step.foreach }; if (e.target.value) f.limit = Number(e.target.value); else delete f.limit; onChange({ ...step, foreach: f }); }} />
           </div>
         </div>
-        <div className="wf-branch">
-          <h5>Für jeden Eintrag</h5>
-          <StepList steps={step.steps} onChange={steps => onChange({ ...step, steps })} path={`${path}/steps`} number={`${number}.`} title={`Schleife in ${name}`} />
-        </div>
+        <p className="wf-hint">Die Schritte für jeden Eintrag stehen im Ablauf unter diesem Schritt.</p>
       </>
     );
   }
@@ -439,7 +327,7 @@ function SetEditor({ step, onChange, name }: { step: Step & { set: Record<string
           {entries.length > 1 ? <ui.Button size="sm" variant="ghost" aria-label={`${name}: «${k}» entfernen`} onClick={() => write(entries.filter((_, j) => j !== i))}>✕</ui.Button> : null}
         </div>
       ))}
-      <ui.Button size="sm" onClick={() => {
+      <ui.Button size="sm" variant="ghost" className="wf-addlink" onClick={() => {
         let n = entries.length + 1;
         while (`wert${n}` in step.set) n++;
         write([...entries, [`wert${n}`, '']]);
@@ -452,15 +340,21 @@ function SetEditor({ step, onChange, name }: { step: Step & { set: Record<string
 
 const FIELD_TYPES: [string, string][] = [['text', 'Text'], ['number', 'Zahl'], ['date', 'Datum'], ['choice', 'Auswahl'], ['boolean', 'Ja/Nein'], ['actor', 'Person'], ['file', 'Datei']];
 
-function PriorityAndDue({ due, priority, onChange, name }: { due?: string; priority?: TaskPriority; onChange: (v: { due?: string; priority?: TaskPriority }) => void; name: string }) {
+/** Frist und Priorität; ohne eigene Frist gilt die der Warteschlange (`queueId`), sonst keine. */
+function PriorityAndDue({ due, priority, onChange, name, queueId }: {
+  due?: string; priority?: TaskPriority; onChange: (v: { due?: string; priority?: TaskPriority }) => void; name: string; queueId?: string;
+}) {
   const { ui } = useWorkflow();
   const id = useId();
+  const queues = useQueues(!!queueId);
+  const queue = queueId ? queues.data?.items.find(q => q.id === queueId) : undefined;
+  const inherited = !queueId ? 'keine Frist' : queue ? `wie Warteschlange: ${queue.slaTarget ? describeDuration(queue.slaTarget) : 'keine Frist'}` : 'wie Warteschlange';
   return (
     <div className="wf-row">
       <div className="wf-field">
         <label htmlFor={`${id}-d`}>Frist</label>
         <ui.Select id={`${id}-d`} value={due ? 'yes' : ''} onChange={e => onChange({ due: e.target.value ? 'P1BD' : undefined, priority })}>
-          <option value="">keine eigene (Warteschlange)</option>
+          <option value="">{inherited}</option>
           <option value="yes">festlegen</option>
         </ui.Select>
       </div>
@@ -500,7 +394,7 @@ function FormFieldsEditor({ fields, onChange, name }: { fields: FieldDefJson[]; 
           <ui.Button size="sm" variant="ghost" aria-label={`${name}: Feld ${i + 1} entfernen`} onClick={() => onChange(fields.filter((_, j) => j !== i))}>✕</ui.Button>
         </div>
       ))}
-      <ui.Button size="sm" onClick={() => onChange([...fields, { key: `feld${fields.length + 1}`, label: '', type: 'text' }])}>Feld hinzufügen</ui.Button>
+      <ui.Button size="sm" variant="ghost" className="wf-addlink" onClick={() => onChange([...fields, { key: `feld${fields.length + 1}`, label: '', type: 'text' }])}>Feld hinzufügen</ui.Button>
     </fieldset>
   );
 }
@@ -527,7 +421,7 @@ function TaskEditor({ step, onChange, name }: { step: TaskStep; onChange: (s: St
           onChange={e => set({ outcomes: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })} />
         <span id={`${id}-oh`} className="wf-hint">{`Danach als {{steps.${step.id}.outcome}} und {{steps.${step.id}.values.…}} verfügbar.`}</span>
       </div>
-      <PriorityAndDue name={name} due={t.due} priority={t.priority} onChange={v => set(v)} />
+      <PriorityAndDue name={name} due={t.due} priority={t.priority} onChange={v => set(v)} queueId={'queue' in t.assignee ? t.assignee.queue : undefined} />
     </>
   );
 }
@@ -552,7 +446,7 @@ function ApprovalEditor({ step, onChange, name }: { step: ApprovalStep; onChange
           {a.approvers.length > 1 ? <ui.Button size="sm" variant="ghost" aria-label={`${name}: Genehmigend ${i + 1} entfernen`} onClick={() => set({ approvers: a.approvers.filter((_, j) => j !== i) })}>✕</ui.Button> : null}
         </div>
       ))}
-      <ui.Button size="sm" onClick={() => set({ approvers: [...a.approvers, { actor: { id: '', kind: 'person' } }] })}>Genehmigende hinzufügen</ui.Button>
+      <ui.Button size="sm" variant="ghost" className="wf-addlink" onClick={() => set({ approvers: [...a.approvers, { actor: { id: '', kind: 'person' } }] })}>Genehmigende hinzufügen</ui.Button>
       <div className="wf-field">
         <label htmlFor={`${id}-m`}>Art</label>
         <ui.Select id={`${id}-m`} value={a.mode} onChange={e => set({ mode: e.target.value as ApprovalMode })}>
@@ -561,7 +455,7 @@ function ApprovalEditor({ step, onChange, name }: { step: ApprovalStep; onChange
       </div>
       <label className="wf-check-row"><ui.Input type="checkbox" checked={a.reasonOnReject !== false} onChange={e => set({ reasonOnReject: e.target.checked ? undefined : false })} /> Begründung bei Ablehnung verlangen</label>
       <span className="wf-hint">{`Ergebnis als {{steps.${step.id}.outcome}} («approved» oder «rejected»), Begründung als {{steps.${step.id}.reason}}.`}</span>
-      <PriorityAndDue name={name} due={a.due} priority={a.priority} onChange={v => set(v)} />
+      <PriorityAndDue name={name} due={a.due} priority={a.priority} onChange={v => set(v)} queueId={a.approvers.map(x => ('queue' in x ? x.queue : '')).find(Boolean)} />
     </>
   );
 }

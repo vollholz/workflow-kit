@@ -3,7 +3,7 @@
  * unter `@vollholz/workflow-web/styles.css` (kein Quellmodul importiert CSS).
  *
  * Stufe 1 (Automation): `WorkflowList`, `StepListEditor`, `RunLog`, `SettingsPanel`, `StatusBanner`,
- * `SubjectWorkflowBar`. Stufe 2 (Aufgaben): `MyWork`, `TaskDetail`, `QueueList`, `QueueView`, `QueueEditor`,
+ * `SubjectWorkflowBar`; für die Reiter eines Workflows `VersionList` und `WorkflowSettings`. Stufe 2 (Aufgaben): `MyWork`, `TaskDetail`, `QueueList`, `QueueView`, `QueueEditor`,
  * `CalendarList`, `CalendarEditor`, Hook `useTaskCounts` für die Navigation. `CaseView` zeigt bis Stufe 3 «noch nicht
  * verfügbar».
  */
@@ -26,6 +26,7 @@ export {
 } from './api.ts';
 export { WorkflowList, type WorkflowListProps } from './WorkflowList.tsx';
 export { StepListEditor, type StepListEditorProps } from './editor.tsx';
+export { VersionList, WorkflowSettings } from './details.tsx';
 export { RunLog, type RunLogProps } from './RunLog.tsx';
 export { SettingsPanel, StatusBanner } from './SettingsPanel.tsx';
 export { SubjectWorkflowBar, type SubjectWorkflowBarProps } from './SubjectWorkflowBar.tsx';

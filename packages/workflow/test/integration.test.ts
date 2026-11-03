@@ -239,7 +239,7 @@ describe('Automation in der App «shop» (PostgreSQL)', { skip }, () => {
     assert.equal(s.enabled, true);
     ok(await call('gus', 'PUT', '/v1/workflows/settings', { enabled: true }));
     const status = ok(await call('ada', 'GET', '/v1/workflows/status'));
-    assert.deepEqual([status.available, status.stage, status.version], [true, 2, '0.4.0']);
+    assert.deepEqual([status.available, status.stage, status.version], [true, 2, '0.5.0']);
     assert.ok(audit.some(e => e.action === 'workflow.settings_changed'));
   });
 
@@ -451,6 +451,18 @@ describe('Automation in der App «shop» (PostgreSQL)', { skip }, () => {
     await drain();
     assert.equal(ok(await call('ada', 'GET', `/v1/workflow-runs/${run.id}`)).state, 'completed');
     ok(await call('ada', 'POST', `/v1/workflows/${id}/pause`));
+  });
+
+  test('Zeitplan-Vorschau: nächste Ausführungen in der Zeitzone, Fehler als Text statt 422', async () => {
+    const p = ok(await call('ada', 'POST', '/v1/workflows/schedule-preview', { cron: '0 7 * * 1-5', timezone: 'Europe/Zurich', count: 3 }));
+    assert.equal(p.ok, true);
+    assert.equal(p.next.length, 3);
+    const zurich = new Intl.DateTimeFormat('de-CH', { timeZone: 'Europe/Zurich', hour: '2-digit', minute: '2-digit', weekday: 'short' });
+    for (const t of p.next) assert.match(zurich.format(new Date(t)), /^(Mo|Di|Mi|Do|Fr)\.?,? 07:00$/);
+    const bad = ok(await call('ada', 'POST', '/v1/workflows/schedule-preview', { cron: 'jeden Morgen', timezone: 'Europe/Zurich' }));
+    assert.deepEqual([bad.ok, bad.next], [false, []]);
+    assert.ok(bad.error);
+    assert.match(ok(await call('ada', 'POST', '/v1/workflows/schedule-preview', { cron: '0 7 * * *', timezone: 'Mars/Basis' })).error, /Unbekannte Zeitzone/);
   });
 
   test('Fehler: Wiederholung nach onError, dann Vorfall; «überspringen» setzt fort', async () => {

@@ -160,9 +160,10 @@ it('Editor: Schritt «Aufgabe» mit Zuständiger Warteschlange, Formularfeld und
     [`PUT /v1/workflows/${WF}`]: async req => json({ ...d, revision: 2, definition: ((await req.json()) as { definition: unknown }).definition }),
   });
   renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} saveDelayMs={0} />);
-  await userEvent.click(await screen.findByRole('button', { name: 'Schritt hinzufügen' }));
-  await userEvent.click(screen.getByRole('button', { name: 'Aufgabe' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Schritt einfügen nach dem Start' }));
+  await userEvent.click(within(screen.getByRole('group', { name: 'Menschen einbeziehen' })).getByRole('button', { name: /^Aufgabe/ }));
   const card = screen.getByRole('region', { name: /Schritt 1: Aufgabe/ });
+  expect(within(card).getByLabelText('Frist')).toHaveDisplayValue('keine Frist');
   await userEvent.type(within(card).getByLabelText(/^Titel/), 'Prüfen');
   await userEvent.click(within(card).getByRole('combobox', { name: 'Zuständig: suchen' }));
   await userEvent.click(await within(card).findByRole('option', { name: 'Verkauf' }));

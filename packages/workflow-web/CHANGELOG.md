@@ -10,6 +10,44 @@ folgen die Angaben für die Entwickler der App.
 
 ## [Unveröffentlicht]
 
+## [0.5.0] – 2026-11-03
+
+### Für Nutzer
+
+- Der Editor zeigt den Ablauf als kompakte Liste: Start, Schritte mit Nummer und Titel, eingerückte Wege für «Dann»,
+  «Sonst» und «Für jeden Eintrag», Ende. Das Formular des gewählten Schritts steht rechts im Detailbereich.
+- Neue Schritte lassen sich an jeder Stelle einfügen («+» zwischen den Schritten und am Anfang jedes Wegs). Die Auswahl
+  zeigt konkrete Schritte mit kurzer Erklärung und Suche: Aufgabe und Genehmigung, die Aktionen der App nach Gruppe,
+  Wenn / Sonst, Für jedes, Warten, Werte setzen, Beenden.
+- Tastatur im Ablauf: ↓/↑ (oder J/K) wechselt den Schritt, Alt+↓/↑ verschiebt ihn, Entf entfernt ihn (mit
+  Rückgängig), + fügt danach ein, Enter springt ins Formular.
+- Zeitplan als Auswahl: täglich, werktags, an bestimmten Wochentagen, monatlich, stündlich, mit Uhrzeit und Zeitzone
+  und den nächsten Ausführungen; der Cron-Ausdruck bleibt als Ausweg.
+- Der Satz zum Auslöser steht oben; ohne eigene Frist nennt eine Aufgabe die Frist ihrer Warteschlange.
+- Der Probelauf ist ein eigener Modus («Bearbeiten | Probelauf») neben dem Ablauf.
+- Neue Bausteine für die Reiter eines Workflows: Versionen und Einstellungen (Name, Beschreibung, Angaben).
+
+### Für den Betrieb
+
+- Braucht `@vollholz/workflow` 0.5.0 (Route `schedule-preview`); ohne sie fehlen nur die nächsten Ausführungen.
+
+### Hinzugefügt
+
+- `VersionList` (`{ workflowId }`) und `WorkflowSettings` (`{ workflowId }`).
+- `StepListEditor`: `onOpenSettings` – «Name und Beschreibung …» öffnet dann die Einstellungen der App statt des
+  Dialogs.
+- `useSchedulePreview(cron, timezone)`.
+
+### Geändert
+
+- Der Editor zeigt Schritte nicht mehr als aufgeklappte Karten, sondern im Ablauf mit Detailbereich; «Schritt
+  hinzufügen» am Ende jeder Liste entfällt zugunsten von «+» an jeder Stelle. Versionen stehen nicht mehr im Editor.
+- Knöpfe zum Hinzufügen in Formularen (Feld, Wert, Genehmigende, Eingabefeld) erscheinen als Link-Knöpfe.
+
+### Behoben
+
+- Die Meldung nach einer Aktion («Workflow pausiert.») verschwindet nach einigen Sekunden.
+
 ## [0.4.0] – 2026-11-03
 
 ### Für Nutzer

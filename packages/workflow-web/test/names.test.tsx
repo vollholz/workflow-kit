@@ -130,8 +130,9 @@ describe('Editor: Personen und Namen', () => {
       { id: 's2', approval: { title: 'Freigabe', approvers: [{ actor: { id: 'ben', kind: 'person' } }, { team: { type: 'role', id: 'sales' } }], mode: 'all' } },
     ]);
     renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} />, { perms: [...ALL, 'queue:manage'], props: { actors: { Name } } });
-    expect(await screen.findByText('Aufgabe «Prüfen» für Warteschlange Verkauf')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText(/Genehmigung «Freigabe» bei/)).toHaveTextContent('Genehmigung «Freigabe» bei Ben Beispiel, Team Verkauf'));
+    const task = await screen.findByRole('button', { name: /^Schritt 1: Aufgabe «Prüfen»/ });
+    await waitFor(() => expect(task).toHaveTextContent('für Warteschlange Verkauf'));
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Schritt 2: Genehmigung «Freigabe»/ })).toHaveTextContent('bei Ben Beispiel, Team Verkauf · Alle müssen zustimmen'));
     expect(screen.queryByText(new RegExp(Q1))).toBeNull();
   });
 
@@ -139,7 +140,8 @@ describe('Editor: Personen und Namen', () => {
     const { calls } = setup([{ id: 's1', task: { title: 'Prüfen', assignee: { actor: { id: '', kind: 'person' } } } }]);
     const search = vi.fn(async (q: string) => [{ id: 'ben', kind: 'person' as const, label: `Ben (${q})` }, { id: 'cara', kind: 'person' as const }]);
     const { unmount } = renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} saveDelayMs={0} />, { perms: [...ALL, 'queue:manage'], props: { actors: { Name, search } } });
-    const card = await screen.findByRole('region', { name: /Schritt 1: Aufgabe/ });
+    await userEvent.click(await screen.findByRole('button', { name: /^Schritt 1: Aufgabe/ }));
+    const card = screen.getByRole('region', { name: /Schritt 1: Aufgabe/ });
     const group = await within(card).findByRole('group', { name: 'Zuständig' });
     expect(within(group).getByText('Noch niemand gewählt.')).toBeInTheDocument();
     expect(within(card).queryByLabelText('Zuständig: ID der Person')).toBeNull();
@@ -151,12 +153,13 @@ describe('Editor: Personen und Namen', () => {
     await userEvent.click(within(list).getByRole('option', { name: 'Cara Muster' }));
     expect(within(group).getByText(/^Person: Cara Muster$/)).toBeInTheDocument();
     expect(within(group).queryByRole('listbox')).toBeNull();
-    expect(screen.getByText('Aufgabe «Prüfen» für Cara Muster')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Schritt 1: Aufgabe «Prüfen»/ })).toHaveTextContent('für Cara Muster');
     await waitFor(() => expect((calls.filter(c => c.method === 'PUT').at(-1)?.body as { definition: { steps: unknown[] } } | undefined)?.definition.steps)
       .toEqual([{ id: 's1', task: { title: 'Prüfen', assignee: { actor: { id: 'cara', kind: 'person' } } } }]));
     unmount();
     renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} />);
-    const card2 = await screen.findByRole('region', { name: /Schritt 1: Aufgabe/ });
+    await userEvent.click(await screen.findByRole('button', { name: /^Schritt 1: Aufgabe/ }));
+    const card2 = screen.getByRole('region', { name: /Schritt 1: Aufgabe/ });
     await userEvent.type(within(card2).getByRole('combobox', { name: 'Zuständig: suchen' }), 'cara');
     expect(await within(card2).findByRole('option', { name: 'Person mit der ID «cara»' })).toBeInTheDocument();
   });
@@ -164,7 +167,8 @@ describe('Editor: Personen und Namen', () => {
   it('Zuständig per Tastatur: Team aus der Gruppe der App wählen', async () => {
     const { calls } = setup([{ id: 's1', task: { title: 'Prüfen', assignee: { actor: { id: '', kind: 'person' } } } }]);
     renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} saveDelayMs={0} />, { perms: [...ALL, 'queue:manage'] });
-    const card = await screen.findByRole('region', { name: /Schritt 1: Aufgabe/ });
+    await userEvent.click(await screen.findByRole('button', { name: /^Schritt 1: Aufgabe/ }));
+    const card = screen.getByRole('region', { name: /Schritt 1: Aufgabe/ });
     const box = within(card).getByRole('combobox', { name: 'Zuständig: suchen' });
     await userEvent.type(box, 'verk');
     const list = await within(card).findByRole('listbox', { name: 'Zuständig: Auswahl' });
