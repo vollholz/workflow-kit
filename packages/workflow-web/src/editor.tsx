@@ -1,8 +1,15 @@
 /**
- * Editor eines Workflows (Konzept Abschnitt 10, W4; UX-Neukonzept Etappen 1 und 2): Kopf mit Name und einem Satz zum
- * Workflow, Statusleiste (aktive Version, Entwurf, Hauptaktion je Zustand), darunter links der Ablauf (Start,
- * Schritte mit Wegen, «+» an jeder Stelle) und rechts der Detailbereich: Auslöser, Formular des gewählten Schritts,
- * Auswahl eines neuen Schritts oder – im Modus «Probelauf» – der Probelauf.
+ * Editor eines Workflows (Konzept Abschnitt 10, W4; UX-Neukonzept Etappen 1 und 2): oben eine Werkzeugleiste, darunter
+ * links der Ablauf (wächst Schritt für Schritt) und rechts der Detailbereich (Auslöser, Formular des gewählten Schritts
+ * oder – im Modus «Probelauf» – der Probelauf). Neue Schritte und den ersten Auslöser wählt man im Sheet.
+ *
+ * Werkzeugleiste – was jemand wann sehen muss, auf einer Zeile:
+ * - immer: Zustand (Entwurf / Aktiv · Version n / Pausiert / Archiviert), knapp ergänzt, wenn es zählt («noch nicht
+ *   aktiv», «Änderungen noch nicht aktiv»), und der Speicherstand;
+ * - nur bei Bedarf: die Zahl der Hinweise (Klick springt zur Stelle), eine Meldung bei Pausieren mit Grund;
+ * - genau eine Hauptaktion je Zustand («Aktivieren …», «Version n aktivieren …», «Fortsetzen»), alles Seltene im Menü
+ *   «Weitere Aktionen» (Pausieren, Verwerfen, Archivieren, Löschen, Name und Beschreibung, Läufe);
+ * - der Wechsel «Bearbeiten | Probelauf». Bereich und Akteur stehen in den Einstellungen und beim Aktivieren.
  *
  * Regeln:
  * - Bearbeitet wird immer der Entwurf. Er speichert sich selbst (entprellt, `If-Match` mit dem Stand); solange etwas
@@ -20,17 +27,17 @@
  * - Probelauf und Hinweise nennen Schritte mit Nummer und Titel, nicht mit ihrer ID.
  * - Ohne `workflow:manage` (oder archiviert, oder eine Art späterer Stufen) ist alles nur lesbar.
  */
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import {
   useDeleteWorkflow, useDryRun, useSaveWorkflow, useValidateDefinition, useWorkflowDetail, useWorkflowLifecycle, useWorkflowMeta, useWorkflowVersion,
 } from './api.ts';
-import { FlowView, listAt, numberOf, splitPath, StepDetail, stepAt, StepPicker, withList, type FlowSelection } from './flow.tsx';
+import { FlowView, listAt, numberOf, splitPath, StepDetail, stepAt, StepSheet, TriggerSheet, withList, type FlowSelection } from './flow.tsx';
 import { contextFields, walk } from './placeholders.tsx';
 import { ActorName, useWorkflow, type WorkflowActor } from './provider.tsx';
 import { EditorCtx, placeOfPath, stepNumberOfPath, stepTitle, type EditorContext } from './steps.tsx';
-import { describeCron, describeTrigger, TriggerEditor } from './trigger.tsx';
+import { describeCron, describeTrigger, TriggerEditor, triggerOfKind } from './trigger.tsx';
 import type { AutomationDefinition, DefinitionError, DryRunJson, Step, WorkflowDefinition, WorkflowDetail, WorkflowMetaJson } from './types.ts';
-import { Badge, fmtTime, MissingRight, STATE_LABEL, stateTone, WorkflowApiError } from './ui.tsx';
+import { Badge, fmtTime, MissingRight, plural, WorkflowApiError } from './ui.tsx';
 
 export interface StepListEditorProps {
   workflowId?: string | null;
@@ -216,74 +223,97 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
   const canActivate = w.can('workflow:activate') && automation;
   const canManage = w.can('workflow:manage');
   const nextVersion = (detail.activeVersion ?? 0) + 1;
+  // Leerer Ablauf: Der Auslöser gilt als gewählt, sobald es Schritte gibt, er vom Standard abweicht oder jemand ihn wählt.
+  const [triggerChosen, setTriggerChosen] = useState(() => !automation || def.steps.length > 0 || canonical(def.trigger) !== canonical({ manual: {} }));
+  const [sheet, setSheet] = useState<null | { mode: 'trigger' } | { mode: 'step'; list: string; index: number }>(null);
+  const pickTrigger = (kind: 'event' | 'schedule' | 'manual') => {
+    setDefinition({ ...def, trigger: triggerOfKind(kind, meta.data) });
+    setTriggerChosen(true);
+    setSheet(null);
+    setSel({ kind: 'trigger' });
+    openDetail.current = true;
+  };
+  const selectInFlow = (s: FlowSelection) => {
+    if (s.kind === 'insert') { setSheet({ mode: 'step', list: s.list, index: s.index }); return; }
+    setSel(s);
+    if (mode === 'sim') setMode('edit');
+  };
+  /** Zur ersten Stelle mit einem Hinweis springen (Auslöser oder Schritt). */
+  const goToIssue = () => {
+    const first = errors[0];
+    if (!first) return;
+    setMode('edit');
+    const m = /^\/steps(?:\/\d+\/(?:then|else|steps))*\/\d+/.exec(first.path);
+    setSel(m ? { kind: 'step', path: m[0] } : { kind: 'trigger' });
+    openDetail.current = true;
+  };
 
   const pause = () => life.pause.mutate(undefined, { onSuccess: d => { adopt(d); setNotice('Workflow pausiert.'); } });
   const resume = () => life.resume.mutate(undefined, { onSuccess: d => { adopt(d); setNotice(`Workflow läuft wieder mit Version ${d.activeVersion}.`); } });
   const activateLabel = detail.activeVersion === null ? 'Aktivieren …' : `Version ${nextVersion} aktivieren …`;
 
-  // Statusleiste: Text und Aktionen je Zustand.
-  let tone: 'accent' | 'ok' | 'info' | 'warn' | 'muted';
-  let text: ReactNode;
+  // Werkzeugleiste: Zustand, ein Hinweis nur wenn er zählt, eine Hauptaktion, Seltenes im Menü.
+  const v = detail.activeVersion;
+  const state: { label: string; tone: 'accent' | 'ok' | 'warn' | 'muted'; note?: string } =
+    detail.state === 'archived' ? { label: 'Archiviert', tone: 'muted', note: 'nur lesbar' }
+      : v === null ? { label: 'Entwurf', tone: 'accent', note: 'noch nicht aktiv' }
+        : detail.state === 'paused' ? { label: `Pausiert · Version ${v}`, tone: 'warn', ...(differs ? { note: 'Entwurf weicht ab' } : {}) }
+          : { label: `Aktiv · Version ${v}`, tone: 'ok', ...(differs ? { note: 'Änderungen noch nicht aktiv' } : {}) };
+  const canLife = w.can('workflow:activate');
   let primary: ReactNode = null;
-  const more: ReactNode[] = [];
-  const btnPause = w.can('workflow:activate') ? <ui.Button key="pause" size="sm" disabled={life.pause.isPending} onClick={pause}>Pausieren</ui.Button> : null;
-  const btnArchive = w.can('workflow:activate') ? <ui.Button key="archive" size="sm" variant="ghost" onClick={() => setDialog('archive')}>Archivieren …</ui.Button> : null;
-  const btnActivate = (variant: 'primary' | 'default') => (canActivate ? <ui.Button key="activate" size="sm" variant={variant} onClick={() => setDialog('activate')}>{activateLabel}</ui.Button> : null);
-  if (detail.state === 'archived') {
-    tone = 'muted';
-    text = <><b>Archiviert.</b> Der Workflow startet nicht mehr und lässt sich nur noch lesen.</>;
-  } else if (detail.activeVersion === null) {
-    tone = 'accent';
-    text = <><b>Noch nie aktiviert.</b> Der Entwurf speichert sich selbst; er wirkt erst nach dem Aktivieren.</>;
-    primary = btnActivate('primary');
-    if (canManage) more.push(<ui.Button key="delete" size="sm" variant="ghost" onClick={() => setDialog('delete')}>Löschen …</ui.Button>);
-  } else if (detail.state === 'paused') {
-    tone = 'warn';
-    text = <><b>Pausiert{detail.pausedReason ? `: ${detail.pausedReason}` : ''}.</b> Version {detail.activeVersion} startet keine neuen Läufe{differs ? '; der Entwurf weicht von ihr ab' : ''}.</>;
-    primary = w.can('workflow:activate') ? <ui.Button size="sm" variant="primary" disabled={life.resume.isPending} onClick={resume}>Fortsetzen</ui.Button> : null;
-    if (differs) more.push(btnActivate('default'));
-    more.push(btnArchive);
-  } else if (differs) {
-    tone = 'info';
-    text = <><b>Der Entwurf weicht von Version {detail.activeVersion} ab</b> und wirkt erst nach dem Aktivieren.</>;
-    primary = btnActivate('primary');
-    if (canManage) more.push(<ui.Button key="discard" size="sm" variant="ghost" onClick={() => setDialog('discard')}>Verwerfen …</ui.Button>);
-    more.push(btnPause, btnArchive);
-  } else {
-    tone = 'ok';
-    text = <><b>Aktiv mit Version {detail.activeVersion}.</b> Keine offenen Änderungen.</>;
-    more.push(btnPause, btnArchive);
+  const menu: MenuItem[] = [];
+  if (detail.state !== 'archived') {
+    if (v === null) {
+      if (canActivate) primary = <ui.Button size="sm" variant="primary" onClick={() => setDialog('activate')}>{activateLabel}</ui.Button>;
+      if (canManage) menu.push({ label: 'Entwurf löschen …', danger: true, onSelect: () => setDialog('delete') });
+    } else if (detail.state === 'paused') {
+      if (canLife) primary = <ui.Button size="sm" variant="primary" aria-disabled={life.resume.isPending || undefined} onClick={() => { if (!life.resume.isPending) resume(); }}>Fortsetzen</ui.Button>;
+      if (differs && canActivate) menu.push({ label: activateLabel, onSelect: () => setDialog('activate') });
+      if (canLife) menu.push({ label: 'Archivieren …', danger: true, onSelect: () => setDialog('archive') });
+    } else {
+      if (differs && canActivate) primary = <ui.Button size="sm" variant="primary" onClick={() => setDialog('activate')}>{activateLabel}</ui.Button>;
+      if (differs && canManage) menu.push({ label: 'Änderungen verwerfen …', onSelect: () => setDialog('discard') });
+      if (canLife) menu.push({ label: 'Pausieren', onSelect: pause }, { label: 'Archivieren …', danger: true, onSelect: () => setDialog('archive') });
+    }
   }
+  if (!readOnly) menu.push({ label: 'Name und Beschreibung …', onSelect: () => (onOpenSettings ? onOpenSettings() : setDialog('details')) });
+  if (onShowRuns) menu.push({ label: 'Läufe ansehen', onSelect: () => onShowRuns(detail.id) });
   const saveState: ReactNode = readOnly || conflict ? null
     : saving ? 'Speichert …'
-      : failed === draftKey ? <>Nicht gespeichert. <button type="button" className="wf-link" onClick={() => void doSave()}>Erneut versuchen</button></>
-        : dirty ? 'Wird gleich gespeichert …'
-          : savedAt ? `Gespeichert um ${fmtTime(savedAt)}` : 'Alle Änderungen gespeichert';
+      : failed === draftKey ? <>Nicht gespeichert · <button type="button" className="wf-link" onClick={() => void doSave()}>Erneut versuchen</button></>
+        : dirty ? 'Speichert gleich …'
+          : savedAt ? <span title={`Gespeichert um ${fmtTime(savedAt)}`}>Gespeichert</span> : 'Gespeichert';
+  const where = (list: string, index: number) => (list === '/steps' && index === 0 ? 'nach dem Auslöser'
+    : index === 0 ? `am Anfang von ${laneName(list)}` : `nach Schritt ${numberOf(`${list}/${index - 1}`)}`);
 
   return (
     <EditorCtx.Provider value={ctx}>
       <div className="wf-editor">
-        <header className="wf-editor-head">
-          <div className="wf-grow">
-            {showTitle ? <h2 className="wf-editor-title">{draft.name}</h2> : null}
-            <p className="wf-editor-sentence">
-              {automation ? describeTrigger(def.trigger, meta.data) : null}
-              {automation ? ' · ' : null}{w.scopeLabel(detail.scope)}
-              {' · '}{detail.actor ? <>handelt als <ActorName actor={detail.actor} /></> : 'handelt als: wird beim Aktivieren gewählt'}
-            </p>
+        {showTitle ? (
+          <header className="wf-editor-head">
+            <h2 className="wf-editor-title">{draft.name}</h2>
             {draft.description ? <p className="wf-editor-desc">{draft.description}</p> : null}
+          </header>
+        ) : null}
+        <div className="wf-bar" role="group" aria-label="Zustand des Workflows">
+          <div className="wf-bar-state">
+            <Badge tone={state.tone}>{state.label}</Badge>
+            {state.note ? <span className="wf-bar-note">{state.note}</span> : null}
+            {saveState ? <span className="wf-bar-save" aria-live="polite">{saveState}</span> : null}
+            {!readOnly && errors.length ? <button type="button" className="wf-bar-issues" onClick={goToIssue}>{plural(errors.length, 'Hinweis', 'Hinweise')}</button> : null}
           </div>
-          <div className="wf-editor-actions">
-            <Badge tone={stateTone(detail.state)}>{STATE_LABEL[detail.state]}{detail.activeVersion ? ` · Version ${detail.activeVersion}` : ''}</Badge>
-            {!readOnly ? <ui.Button size="sm" variant="ghost" onClick={() => (onOpenSettings ? onOpenSettings() : setDialog('details'))}>Name und Beschreibung …</ui.Button> : null}
-            {onShowRuns ? <ui.Button size="sm" variant="ghost" onClick={() => onShowRuns(detail.id)}>Läufe ansehen</ui.Button> : null}
+          {automation ? (
+            <div className="wf-seg" role="group" aria-label="Ansicht">
+              <button type="button" aria-pressed={mode === 'edit'} onClick={() => setMode('edit')}>Bearbeiten</button>
+              <button type="button" aria-pressed={mode === 'sim'} onClick={() => setMode('sim')}>Probelauf</button>
+            </div>
+          ) : null}
+          <div className="wf-bar-actions">
+            {primary}
+            {menu.length ? <MoreMenu items={menu} /> : null}
           </div>
-        </header>
-        <div className={`wf-life ${tone}`} role="group" aria-label="Zustand des Workflows">
-          <p className="wf-life-text">{text}</p>
-          <div className="wf-life-actions">{more}{primary}</div>
-          {saveState ? <p className="wf-life-save" aria-live="polite">{saveState}</p> : null}
         </div>
+        {detail.state === 'paused' && detail.pausedReason ? <p className="wf-banner" role="note">{`Pausiert: ${detail.pausedReason}`}</p> : null}
         <div role="status" aria-live="polite" className="wf-sr-live">{notice}</div>
         {!canManage ? <MissingRight perm="workflow:manage" lead="Zum Bearbeiten" /> : null}
         {!automation ? <p className="wf-hint">Diese Art von Workflow folgt in einer späteren Stufe; der Editor zeigt sie noch nicht an.</p> : null}
@@ -292,43 +322,40 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
         {life.resume.isError ? <ui.ErrorBox error={life.resume.error} /> : null}
         {meta.isError ? <ui.ErrorBox error={meta.error} onRetry={() => void meta.refetch()} /> : null}
         {automation ? (
-          <>
-            <div className="wf-editor-tools">
-              <div className="wf-seg" role="group" aria-label="Ansicht">
-                <button type="button" aria-pressed={mode === 'edit'} onClick={() => setMode('edit')}>Bearbeiten</button>
-                <button type="button" aria-pressed={mode === 'sim'} onClick={() => setMode('sim')}>Probelauf</button>
-              </div>
-              <ValidationSummary pending={validation.isFetching} ok={!errors.length && !!validation.data} errors={otherErrors} total={errors.length} readOnly={readOnly} />
+          <div className="wf-editor-grid">
+            <div className="wf-editor-main">
+              <FlowView steps={steps} trigger={triggerChosen ? { value: def.trigger, text: describeTrigger(def.trigger, meta.data) } : null} sel={sel}
+                onSelect={selectInFlow} onAddFirst={() => setSheet({ mode: 'trigger' })} onMove={move} onRemove={remove}
+                onOpen={() => { openDetail.current = true; setSel(x => ({ ...x })); }} />
+              {otherErrors.length ? <ul className="wf-step-errors" aria-label="Weitere Hinweise">{otherErrors.map((e, i) => <li key={i}>{placeOfPath(e.path)}: {e.message}</li>)}</ul> : null}
+              {removed ? (
+                <div className="wf-undo" role="status">
+                  <span className="wf-grow">{`${removed.label} entfernt.`}</span>
+                  <ui.Button ref={undoRef} size="sm" onClick={() => { setDefinition(removed.definition); setRemoved(null); setNotice('Schritt wiederhergestellt.'); }}>Rückgängig</ui.Button>
+                  <ui.Button size="sm" variant="ghost" aria-label="Hinweis schliessen" onClick={() => setRemoved(null)}>✕</ui.Button>
+                </div>
+              ) : null}
             </div>
-            <div className="wf-editor-grid">
-              <div className="wf-editor-main">
-                <FlowView steps={steps} trigger={describeTrigger(def.trigger, meta.data)} sel={sel}
-                  onSelect={s => { setSel(s); if (mode === 'sim') setMode('edit'); }} onMove={move} onRemove={remove} onOpen={() => { openDetail.current = true; setSel(x => ({ ...x })); }} />
-                {removed ? (
-                  <div className="wf-undo" role="status">
-                    <span className="wf-grow">{`${removed.label} entfernt.`}</span>
-                    <ui.Button ref={undoRef} size="sm" onClick={() => { setDefinition(removed.definition); setRemoved(null); setNotice('Schritt wiederhergestellt.'); }}>Rückgängig</ui.Button>
-                    <ui.Button size="sm" variant="ghost" aria-label="Hinweis schliessen" onClick={() => setRemoved(null)}>✕</ui.Button>
-                  </div>
-                ) : null}
-              </div>
-              <aside className="wf-editor-side wf-detail" ref={detailRef} aria-label={mode === 'sim' ? 'Probelauf' : 'Detail'}>
-                {mode === 'sim' ? <DryRunPanel workflowId={detail.id} definition={def} meta={meta.data} />
-                  : sel.kind === 'insert' ? (
-                    <StepPicker where={sel.list === '/steps' && sel.index === 0 ? 'am Anfang' : sel.index === 0 ? `am Anfang von ${laneName(sel.list)}` : `nach Schritt ${numberOf(`${sel.list}/${sel.index - 1}`)}`}
-                      onPick={step => insert(sel.list, sel.index, step)} onCancel={() => setSel({ kind: 'trigger' })} />
-                  ) : selected && sel.kind === 'step' ? (
-                    <StepDetail key={sel.path} step={selected} path={sel.path} last={splitPath(sel.path).index >= (listAt(steps, splitPath(sel.path).list)?.length ?? 1) - 1}
-                      onChange={s => { const { list, index } = splitPath(sel.path); setSteps(withList(steps, list, l => l.map((x, j) => (j === index ? s : x)))); }}
-                      onRemove={() => remove(sel.path)} onMove={d => { move(sel.path, d); }} />
-                  ) : (
-                    <TriggerEditor trigger={def.trigger} meta={meta.data} readOnly={readOnly} errors={triggerErrors} onChange={trigger => setDefinition({ ...def, trigger })} />
-                  )}
-              </aside>
-            </div>
-          </>
+            <aside className="wf-editor-side wf-detail" ref={detailRef} aria-label={mode === 'sim' ? 'Probelauf' : 'Detail'}>
+              {mode === 'sim' ? <DryRunPanel workflowId={detail.id} definition={def} meta={meta.data} />
+                : !triggerChosen ? (
+                  <div className="wf-detail-empty"><b>Noch kein Schritt</b><p>Beginne links mit «Ersten Schritt hinzufügen»: Wähle, wie der Workflow startet.</p></div>
+                ) : selected && sel.kind === 'step' ? (
+                  <StepDetail key={sel.path} step={selected} path={sel.path} last={splitPath(sel.path).index >= (listAt(steps, splitPath(sel.path).list)?.length ?? 1) - 1}
+                    onChange={s => { const { list, index } = splitPath(sel.path); setSteps(withList(steps, list, l => l.map((x, j) => (j === index ? s : x)))); }}
+                    onRemove={() => remove(sel.path)} onMove={d => { move(sel.path, d); }} />
+                ) : (
+                  <TriggerEditor trigger={def.trigger} meta={meta.data} readOnly={readOnly} errors={triggerErrors} onChange={trigger => setDefinition({ ...def, trigger })} />
+                )}
+            </aside>
+          </div>
         ) : null}
       </div>
+      {sheet?.mode === 'trigger' ? <TriggerSheet onPick={pickTrigger} onClose={() => setSheet(null)} /> : null}
+      {sheet?.mode === 'step' ? (
+        <StepSheet where={where(sheet.list, sheet.index)} onClose={() => setSheet(null)}
+          onPick={step => { const { list, index } = sheet; setSheet(null); insert(list, index, step); }} />
+      ) : null}
       {conflict ? (
         <ui.Dialog title="Inzwischen geändert" role="alertdialog" onClose={() => setConflict(false)}
           footer={<><ui.Button data-autofocus onClick={() => void reload()}>Neu laden</ui.Button><ui.Button variant="primary" onClick={() => void keepMine()}>Meine Fassung speichern</ui.Button></>}>
@@ -377,14 +404,49 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
   );
 }
 
-function ValidationSummary({ pending, ok, errors, total, readOnly }: { pending: boolean; ok: boolean; errors: DefinitionError[]; total: number; readOnly: boolean }) {
-  if (readOnly) return null;
+// ---------------------------------------------------------------- Menü «Weitere Aktionen»
+
+interface MenuItem { label: string; onSelect: () => void; danger?: boolean }
+
+/** Menü für seltene Aktionen, Gefährliches abgetrennt zuletzt: ↓/↑ wechseln, Esc schliesst; nach der Wahl geht der Fokus an den Menüknopf zurück. */
+function MoreMenu({ items }: { items: MenuItem[] }) {
+  const { ui } = useWorkflow();
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  const btn = useRef<HTMLButtonElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+  const safe = items.filter(x => !x.danger), danger = items.filter(x => x.danger);
+  useEffect(() => {
+    if (!open) return;
+    list.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    const away = (e: MouseEvent) => { if (!list.current?.contains(e.target as Node) && !btn.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', away);
+    return () => document.removeEventListener('mousedown', away);
+  }, [open]);
+  const onKey = (e: KeyboardEvent<HTMLUListElement>) => {
+    const all = [...(list.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])];
+    const i = all.indexOf(document.activeElement as HTMLElement);
+    if (e.key === 'ArrowDown') { e.preventDefault(); all[(i + 1) % all.length]?.focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); all[(i - 1 + all.length) % all.length]?.focus(); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setOpen(false); btn.current?.focus(); }
+    else if (e.key === 'Tab') setOpen(false);
+  };
+  const entry = (x: MenuItem) => (
+    <li key={x.label} role="none">
+      <button type="button" role="menuitem" className={x.danger ? 'danger' : undefined} onClick={() => { btn.current?.focus(); setOpen(false); x.onSelect(); }}>{x.label}</button>
+    </li>
+  );
   return (
-    <div className="wf-validation" role="status" aria-live="polite">
-      {pending ? <span className="wf-muted">Wird geprüft …</span>
-        : ok ? <span className="wf-ok">Keine Fehler gefunden – der Workflow lässt sich aktivieren.</span>
-          : total ? <span className="wf-bad">{total === 1 ? '1 Hinweis' : `${total} Hinweise`} – siehe die markierten Stellen.</span> : null}
-      {errors.length ? <ul className="wf-step-errors" aria-label="Weitere Hinweise">{errors.map((e, i) => <li key={i}>{placeOfPath(e.path)}: {e.message}</li>)}</ul> : null}
+    <div className="wf-menu">
+      <ui.Button ref={btn} size="sm" variant="ghost" aria-label="Weitere Aktionen" aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined}
+        onClick={() => setOpen(o => !o)}><span aria-hidden="true">⋯</span></ui.Button>
+      {open ? (
+        <ul id={id} ref={list} role="menu" aria-label="Weitere Aktionen" className="wf-menu-list" onKeyDown={onKey}>
+          {safe.map(entry)}
+          {safe.length && danger.length ? <li role="separator" className="wf-menu-sep" /> : null}
+          {danger.map(entry)}
+        </ul>
+      ) : null}
     </div>
   );
 }

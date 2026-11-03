@@ -1,8 +1,9 @@
 /**
- * Editor: Ablauf mit Detailbereich (Einfügen an jeder Stelle, Auswahl der Schritte mit Suche, Wege, Tastatur),
- * Aktion aus dem Schema, Platzhalter, Prüfung am Schritt, Entwurf speichert sich selbst, Konflikt beim Speichern,
- * Statusleiste (Aktivieren, Version n aktivieren, Verwerfen, Fortsetzen), Entfernen mit Rückgängig, Zeitplan als
- * Auswahl, Probelauf mit Schrittnamen; dazu die reinen Hilfen für Pfade und Zeitpläne.
+ * Editor: Ablauf wächst Schritt für Schritt (leer nur «Ersten Schritt hinzufügen», Auslöser im Sheet), Einfügen an jeder
+ * Stelle über das Sheet (Gruppen, Zurück, Suche), Wege, Tastatur, Aktion aus dem Schema, Platzhalter, Prüfung am
+ * Schritt, Entwurf speichert sich selbst, Konflikt beim Speichern, Werkzeugleiste (Zustand, Hauptaktion, Menü «Weitere
+ * Aktionen»), Entfernen mit Rückgängig, Zeitplan als Auswahl, Probelauf mit Schrittnamen; dazu die reinen Hilfen für
+ * Pfade und Zeitpläne.
  */
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -34,6 +35,17 @@ const lastDef = (calls: Call[]) => (put(calls).at(-1)?.body as { definition: Aut
 const lastSteps = (calls: Call[]) => lastDef(calls)?.steps;
 const detailPane = () => screen.getByRole('complementary', { name: 'Detail' });
 const row = (name: RegExp) => screen.getByRole('button', { name });
+const bar = () => screen.getByRole('group', { name: 'Zustand des Workflows' });
+/** Schritt im Sheet wählen: Gruppe öffnen, dann den Schritt. */
+async function pick(group: string, step: RegExp) {
+  const sheet = screen.getByRole('dialog', { name: 'Schritt hinzufügen' });
+  await userEvent.click(within(sheet).getByRole('button', { name: new RegExp(`^${group}`) }));
+  await userEvent.click(within(within(sheet).getByRole('group', { name: group })).getByRole('button', { name: step }));
+}
+async function menu(item: string) {
+  await userEvent.click(within(bar()).getByRole('button', { name: 'Weitere Aktionen' }));
+  await userEvent.click(screen.getByRole('menuitem', { name: item }));
+}
 
 describe('Pfade im Ablauf', () => {
   const steps: Step[] = [
@@ -67,28 +79,58 @@ describe('Zeitplan als Auswahl', () => {
 });
 
 describe('StepListEditor', () => {
-  it('Einfügen nach dem Start: Auswahl mit Suche, Aktion aus dem Schema, Platzhalter; der Entwurf speichert sich mit If-Match', async () => {
+  it('leerer Ablauf: «Ersten Schritt hinzufügen» wählt den Auslöser im Sheet, danach wächst der Ablauf', async () => {
+    const { calls } = routes(detail({}, { trigger: { manual: {} }, steps: [] }), {
+      [`PUT /v1/workflows/${WF}`]: async req => json({ ...detail({ revision: 2 }), definition: ((await req.json()) as { definition: unknown }).definition }),
+      'POST /v1/workflows/schedule-preview': () => json({ ok: true, error: null, next: [] }),
+    });
+    renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} saveDelayMs={0} />);
+    const first = await screen.findByRole('button', { name: /Ersten Schritt hinzufügen/ });
+    expect(screen.queryByRole('button', { name: 'Auslöser' })).toBeNull();
+    expect(screen.queryByText('Ende')).toBeNull();
+    expect(within(detailPane()).getByText('Noch kein Schritt')).toBeInTheDocument();
+    await userEvent.click(first);
+    const sheet = screen.getByRole('dialog', { name: 'Wie startet der Workflow?' });
+    expect(within(sheet).getByRole('button', { name: /^Wenn etwas passiert/ })).toHaveFocus();
+    await userEvent.click(within(sheet).getByRole('button', { name: /^Nach Zeitplan/ }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(row(/^Auslöser$/)).toHaveTextContent('Nach Zeitplan');
+    expect(within(detailPane()).getByLabelText('Wiederholen')).toHaveValue('workdays');
+    expect(screen.getByRole('button', { name: 'Schritt einfügen nach dem Auslöser' })).toHaveTextContent('Schritt hinzufügen');
+    await waitFor(() => expect(lastDef(calls)?.trigger).toMatchObject({ schedule: { cron: '0 7 * * 1-5' } }));
+  });
+
+  it('Einfügen nach dem Auslöser: Sheet mit Gruppen, Zurück und Suche; Aktion aus dem Schema; der Entwurf speichert sich mit If-Match', async () => {
     const { calls } = routes(detail(), {
       [`PUT /v1/workflows/${WF}`]: async req => json({ ...detail({ revision: 2 }), definition: ((await req.json()) as { definition: unknown }).definition }),
     });
     renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} saveDelayMs={0} />);
-    expect(await screen.findByRole('button', { name: /^Start/ })).toHaveAttribute('aria-current', 'true');
+    expect(await screen.findByRole('button', { name: 'Auslöser' })).toHaveAttribute('aria-current', 'true');
     expect(screen.queryByRole('button', { name: 'Speichern' })).toBeNull();
-    expect(screen.getByText('Alle Änderungen gespeichert')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Schritt einfügen nach dem Start' }));
-    const picker = within(detailPane()).getByRole('region', { name: 'am Anfang' });
-    const search = within(picker).getByRole('searchbox', { name: 'Schritt suchen' });
+    expect(within(bar()).getByText('Gespeichert')).toBeInTheDocument();
+    const plus = screen.getByRole('button', { name: 'Schritt einfügen nach dem Auslöser' });
+    await userEvent.click(plus);
+    const sheet = screen.getByRole('dialog', { name: 'Schritt hinzufügen' });
+    const search = within(sheet).getByRole('searchbox', { name: 'Schritt suchen' });
     expect(search).toHaveFocus();
+    const groups = within(sheet).getByRole('list', { name: 'Gruppen' });
+    expect(within(groups).getAllByRole('button').map(b => b.textContent)).toEqual([
+      expect.stringMatching(/^BestellungenBestellung stornieren/), expect.stringMatching(/^Ablauf steuernWenn \/ Sonst/),
+    ]);
+    await userEvent.click(within(groups).getByRole('button', { name: /^Ablauf steuern/ }));
+    expect(within(sheet).getByRole('button', { name: '← Zurück' })).toHaveFocus();
+    await userEvent.click(within(sheet).getByRole('button', { name: '← Zurück' }));
+    await waitFor(() => expect(within(sheet).getByRole('button', { name: /^Ablauf steuern/ })).toHaveFocus());
     await userEvent.type(search, 'xyz');
-    expect(within(picker).getByText('Kein Schritt passt zur Suche.')).toBeInTheDocument();
+    expect(within(sheet).getByText('Kein Schritt passt zur Suche.')).toBeInTheDocument();
     await userEvent.clear(search);
     await userEvent.type(search, 'storn');
-    expect(within(picker).queryByRole('button', { name: /^Wenn/ })).toBeNull();
-    await userEvent.click(within(within(picker).getByRole('group', { name: 'Bestellungen' })).getByRole('button', { name: /^Bestellung stornieren/ }));
+    expect(within(sheet).queryByRole('button', { name: /^Wenn/ })).toBeNull();
+    await userEvent.click(within(within(sheet).getByRole('group', { name: 'Bestellungen' })).getByRole('button', { name: /^Bestellung stornieren/ }));
+    expect(screen.queryByRole('dialog')).toBeNull();
     const card = within(detailPane()).getByRole('region', { name: /Schritt 1: Aktion «Bestellung stornieren»/ });
     expect(row(/^Schritt 1: Aktion «Bestellung stornieren»/)).toHaveAttribute('aria-current', 'true');
     expect(within(card).getByLabelText(/^Grund/)).toBeRequired();
-    expect(within(card).getByText('Steht im Verlauf')).toBeInTheDocument();
     await userEvent.type(within(card).getByLabelText(/^Grund/), 'Zahlung fehlt');
     await userEvent.click(within(card).getByLabelText('Kundschaft benachrichtigen'));
     await userEvent.click(within(card).getByRole('button', { name: 'Platzhalter einfügen in «Bestellung»' }));
@@ -99,7 +141,17 @@ describe('StepListEditor', () => {
       { id: 's1', action: 'order.cancel', input: { order: '{{subject.id}}', reason: 'Zahlung fehlt', notify: true } },
     ]));
     expect(put(calls)[0]!.headers.get('if-match')).toBe('"1"');
-    expect(await screen.findByText(/^Gespeichert um \d\d:\d\d$/)).toBeInTheDocument();
+  });
+
+  it('Sheet schliesst mit Esc und gibt den Fokus an «+» zurück', async () => {
+    routes(detail());
+    renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} />);
+    const plus = await screen.findByRole('button', { name: 'Schritt einfügen nach dem Auslöser' });
+    await userEvent.click(plus);
+    expect(screen.getByRole('dialog', { name: 'Schritt hinzufügen' })).toBeInTheDocument();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(plus).toHaveFocus();
   });
 
   it('Wenn/Sonst: Bedingung im Detail, Schritte in den Wegen einfügen, Tastatur wechselt und verschiebt', async () => {
@@ -107,13 +159,13 @@ describe('StepListEditor', () => {
       [`PUT /v1/workflows/${WF}`]: () => json(detail({ revision: 2 })),
     });
     renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} saveDelayMs={0} />);
-    const start = await screen.findByRole('button', { name: /^Start/ });
+    const start = await screen.findByRole('button', { name: 'Auslöser' });
     start.focus();
     await userEvent.keyboard('{ArrowDown}');
     expect(row(/^Schritt 1: Beenden/)).toHaveFocus();
     expect(row(/^Schritt 1: Beenden/)).toHaveAttribute('aria-current', 'true');
     await userEvent.click(screen.getByRole('button', { name: 'Schritt einfügen nach Schritt 1' }));
-    await userEvent.click(within(detailPane()).getByRole('button', { name: /^Wenn \/ Sonst/ }));
+    await pick('Ablauf steuern', /^Wenn \/ Sonst/);
     const ifCard = within(detailPane()).getByRole('region', { name: /Schritt 2: Wenn \/ Sonst/ });
     const cond = within(ifCard).getByRole('group', { name: 'Schritt 2: Bedingung, Teil 1' });
     await userEvent.selectOptions(within(cond).getByLabelText('Schritt 2: Bedingung, Teil 1: Feld'), 'Betrag');
@@ -121,10 +173,10 @@ describe('StepListEditor', () => {
     await userEvent.type(within(cond).getByLabelText('Schritt 2: Bedingung, Teil 1: Wert'), '100');
     expect(row(/^Schritt 2: Wenn \/ Sonst/)).toHaveTextContent('Wenn «Betrag» ist grösser als «100»');
     await userEvent.click(screen.getByRole('button', { name: 'Schritt einfügen am Anfang von «Dann» in Schritt 2' }));
-    await userEvent.click(within(detailPane()).getByRole('button', { name: /^Bestellung stornieren/ }));
+    await pick('Bestellungen', /^Bestellung stornieren/);
     await userEvent.click(screen.getByRole('button', { name: 'Schritt einfügen am Anfang von «Sonst» in Schritt 2' }));
-    expect(within(detailPane()).getByRole('heading', { name: 'am Anfang von «Sonst» in Schritt 2' })).toBeInTheDocument();
-    await userEvent.click(within(detailPane()).getByRole('button', { name: /^Beenden/ }));
+    expect(within(screen.getByRole('dialog', { name: 'Schritt hinzufügen' })).getByText('Am Anfang von «Sonst» in Schritt 2')).toBeInTheDocument();
+    await pick('Ablauf steuern', /^Beenden/);
     expect(row(/^Schritt 2\.1: Aktion «Bestellung stornieren»/)).toBeInTheDocument();
     expect(row(/^Schritt 2\.s1: Beenden/)).toHaveAttribute('aria-current', 'true');
     row(/^Schritt 2: Wenn \/ Sonst/).focus();
@@ -157,13 +209,13 @@ describe('StepListEditor', () => {
     await waitFor(() => expect(lastSteps(calls)).toEqual([{ id: 's1', end: { result: 'completed' } }]));
   });
 
-  it('zeigt Meldungen der Prüfung am Schritt im Ablauf und im Detail', async () => {
+  it('Hinweise: Zähler an der Karte und in der Leiste; Klick springt zur ersten Stelle', async () => {
     const { calls } = routes(detail({}, { steps: [{ id: 's1', action: 'order.cancel', input: {} }, { id: 's2', if: { field: 'steps.x.state', op: 'eq', value: 'a' }, then: [{ id: 's3', end: { result: 'completed' } }] }] }), {
       'POST /v1/workflows/validate': () => json({
         ok: false,
         errors: [
-          { path: '/steps/0/input/reason', message: 'Pflichtangabe «reason» fehlt' },
           { path: '/steps/1/if/field', message: 'Verweis auf unbekannten Schritt «x»' },
+          { path: '/steps/0/input/reason', message: 'Pflichtangabe «reason» fehlt' },
           { path: '/steps/1/then/0/end/result', message: 'Erlaubt: «completed»' },
           { path: '/trigger/event', message: 'Unbekannter Ereignistyp «order.updated»' },
         ],
@@ -175,11 +227,11 @@ describe('StepListEditor', () => {
     expect(await within(pane).findByRole('list', { name: 'Hinweise zum Auslöser' })).toHaveTextContent('Unbekannter Ereignistyp');
     await waitFor(() => expect(row(/^Schritt 1: Aktion/)).toHaveTextContent('1 Hinweis'));
     expect(row(/^Schritt 2\.1: Beenden/)).toHaveTextContent('1 Hinweis');
-    await userEvent.click(row(/^Schritt 2: Wenn/));
+    await userEvent.click(within(bar()).getByRole('button', { name: '4 Hinweise' }));
+    expect(row(/^Schritt 2: Wenn/)).toHaveAttribute('aria-current', 'true');
     const second = within(detailPane()).getByRole('list', { name: 'Hinweise zu Schritt 2' });
     expect(second).toHaveTextContent('Verweis auf unbekannten Schritt «x»');
     expect(second).not.toHaveTextContent('Erlaubt');
-    expect(screen.getByText(/4 Hinweise/)).toBeInTheDocument();
     expect(calls.find(c => c.path === '/v1/workflows/validate')!.body).toMatchObject({ definition: { kind: 'automation' } });
   });
 
@@ -196,7 +248,8 @@ describe('StepListEditor', () => {
       },
     });
     renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} saveDelayMs={0} />);
-    await userEvent.click(await screen.findByRole('button', { name: 'Name und Beschreibung …' }));
+    await screen.findByRole('button', { name: 'Auslöser' });
+    await menu('Name und Beschreibung …');
     const dialog0 = screen.getByRole('dialog', { name: 'Name und Beschreibung' });
     const name = within(dialog0).getByLabelText('Name des Workflows');
     await userEvent.clear(name);
@@ -214,11 +267,23 @@ describe('StepListEditor', () => {
     expect(put(calls)).toHaveLength(2);
   });
 
-  it('«Name und Beschreibung …» öffnet die Einstellungen der App, wenn sie angegeben sind', async () => {
+  it('Menü «Weitere Aktionen»: Tastatur; «Name und Beschreibung …» öffnet die Einstellungen der App', async () => {
     routes(detail());
     const onOpenSettings = vi.fn();
     renderWith(<StepListEditor workflowId={WF} onOpenSettings={onOpenSettings} />);
-    await userEvent.click(await screen.findByRole('button', { name: 'Name und Beschreibung …' }));
+    await screen.findByRole('button', { name: 'Auslöser' });
+    const more = within(bar()).getByRole('button', { name: 'Weitere Aktionen' });
+    await userEvent.click(more);
+    const items = screen.getAllByRole('menuitem');
+    expect(items.map(i => i.textContent)).toEqual(['Name und Beschreibung …', 'Entwurf löschen …']);
+    expect(screen.getByRole('separator')).toBeInTheDocument();
+    expect(items[0]).toHaveFocus();
+    await userEvent.keyboard('{ArrowDown}');
+    expect(items[1]).toHaveFocus();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(more).toHaveFocus();
+    await menu('Name und Beschreibung …');
     expect(onOpenSettings).toHaveBeenCalled();
     expect(screen.queryByRole('dialog')).toBeNull();
   });
@@ -238,23 +303,22 @@ describe('StepListEditor', () => {
     expect(await within(pane).findByText('Nächste Ausführungen')).toBeInTheDocument();
     expect(within(pane).getAllByRole('listitem')).toHaveLength(3);
     await waitFor(() => expect(lastDef(calls)?.trigger).toEqual({ schedule: { cron: '0 7 * * 1,5', timezone: 'Europe/Zurich' } }));
-    expect(calls.some(c => c.path === '/v1/workflows/schedule-preview')).toBe(true);
   });
 
-  it('Aktivieren: Zusammenfassung mit Akteur und Zeitplan, danach Statusleiste mit aktiver Version', async () => {
+  it('Aktivieren: Zusammenfassung mit Akteur und Zeitplan, danach Zustand «Aktiv · Version 1»', async () => {
     const def: Partial<AutomationDefinition> = { trigger: { schedule: { cron: '0 7 * * 1-5', timezone: 'Europe/Zurich' } }, steps: [{ id: 's1', end: { result: 'completed' } }] };
     const { calls } = routes(detail({}, def), {
       [`POST /v1/workflows/${WF}/activate`]: () => json(detail({ state: 'active', activeVersion: 1, revision: 2, actor: { id: 'anna', kind: 'person' } }, def)),
     });
     renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} />);
-    expect(await screen.findByRole('group', { name: 'Zustand des Workflows' })).toHaveTextContent('Noch nie aktiviert.');
-    expect(screen.getByText(/handelt als: wird beim Aktivieren gewählt/)).toBeInTheDocument();
-    const open = screen.getByRole('button', { name: 'Aktivieren …' });
+    await screen.findByRole('button', { name: 'Auslöser' });
+    expect(bar()).toHaveTextContent('Entwurf');
+    expect(bar()).toHaveTextContent('noch nicht aktiv');
+    const open = within(bar()).getByRole('button', { name: 'Aktivieren …' });
     await userEvent.click(open);
     const dialog = screen.getByRole('dialog', { name: 'Workflow aktivieren' });
     expect(within(dialog).getByText('Nach Zeitplan: werktags (Mo–Fr) um 07:00 (Europe/Zurich)')).toBeInTheDocument();
     expect(within(dialog).getByLabelText('Ich selbst (Anna Muster)')).toBeChecked();
-    expect(within(dialog).getByRole('button', { name: 'Aktivieren' })).toBeEnabled();
     await userEvent.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(open).toHaveFocus();
@@ -262,12 +326,14 @@ describe('StepListEditor', () => {
     await userEvent.click(within(screen.getByRole('dialog', { name: 'Workflow aktivieren' })).getByRole('button', { name: 'Aktivieren' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(calls.find(c => c.path.endsWith('/activate'))!.body).toEqual({ revision: 1 });
-    expect(screen.getByText('Aktiv · Version 1')).toBeInTheDocument();
-    expect(screen.getByRole('group', { name: 'Zustand des Workflows' })).toHaveTextContent('Aktiv mit Version 1. Keine offenen Änderungen.');
-    expect(screen.getByRole('button', { name: 'Pausieren' })).toBeInTheDocument();
+    expect(within(bar()).getByText('Aktiv · Version 1')).toBeInTheDocument();
+    expect(bar()).not.toHaveTextContent('noch nicht aktiv');
+    expect(within(bar()).queryByRole('button', { name: /aktivieren …/i })).toBeNull();
+    await userEvent.click(within(bar()).getByRole('button', { name: 'Weitere Aktionen' }));
+    expect(screen.getAllByRole('menuitem').map(i => i.textContent)).toEqual(['Pausieren', 'Name und Beschreibung …', 'Archivieren …']);
   });
 
-  it('Entwurf weicht von der aktiven Version ab: «Version 2 aktivieren …», Verwerfen setzt ihn zurück', async () => {
+  it('Entwurf weicht von der aktiven Version ab: «Version 2 aktivieren …», Verwerfen im Menü setzt ihn zurück', async () => {
     const v1: AutomationDefinition = { schemaVersion: 1, kind: 'automation', trigger: { manual: {} }, steps: [{ id: 's1', end: { result: 'completed' } }] };
     const changed = { ...v1, steps: [...v1.steps, { id: 's2', set: { a: '1' } }] };
     const { calls } = routes(detail({ state: 'active', activeVersion: 1, actor: { id: 'anna', kind: 'person' } }, changed), {
@@ -275,27 +341,29 @@ describe('StepListEditor', () => {
       [`PUT /v1/workflows/${WF}`]: async req => json({ ...detail({ state: 'active', activeVersion: 1, revision: 2 }), definition: ((await req.json()) as { definition: unknown }).definition }),
     });
     renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} saveDelayMs={0} />);
-    const bar = await screen.findByRole('group', { name: 'Zustand des Workflows' });
-    await waitFor(() => expect(bar).toHaveTextContent('Der Entwurf weicht von Version 1 ab und wirkt erst nach dem Aktivieren.'));
-    expect(within(bar).getByRole('button', { name: 'Version 2 aktivieren …' })).toBeInTheDocument();
-    await userEvent.click(within(bar).getByRole('button', { name: 'Verwerfen …' }));
+    await screen.findByRole('button', { name: 'Auslöser' });
+    await waitFor(() => expect(bar()).toHaveTextContent('Änderungen noch nicht aktiv'));
+    expect(within(bar()).getByRole('button', { name: 'Version 2 aktivieren …' })).toBeInTheDocument();
+    await menu('Änderungen verwerfen …');
     const confirm = screen.getByRole('alertdialog', { name: 'Entwurf verwerfen?' });
     expect(within(confirm).getByRole('button', { name: 'Abbrechen' })).toHaveFocus();
     await userEvent.click(within(confirm).getByRole('button', { name: 'Verwerfen' }));
-    await waitFor(() => expect(bar).toHaveTextContent('Aktiv mit Version 1. Keine offenen Änderungen.'));
+    await waitFor(() => expect(bar()).not.toHaveTextContent('Änderungen noch nicht aktiv'));
+    expect(within(bar()).getByText('Aktiv · Version 1')).toBeInTheDocument();
     await waitFor(() => expect(lastSteps(calls)).toEqual(v1.steps));
   });
 
-  it('Pausiert: «Fortsetzen» ohne neue Version', async () => {
+  it('Pausiert: Meldung mit Grund, «Fortsetzen» ohne neue Version', async () => {
     const def: Partial<AutomationDefinition> = { trigger: { manual: {} }, steps: [{ id: 's1', end: { result: 'completed' } }] };
-    const { calls } = routes(detail({ state: 'paused', activeVersion: 3, pausedReason: 'Von Hand', actor: { id: 'anna', kind: 'person' } }, def), {
+    const { calls } = routes(detail({ state: 'paused', activeVersion: 3, pausedReason: 'Akteur nicht mehr aktiv', actor: { id: 'anna', kind: 'person' } }, def), {
       [`POST /v1/workflows/${WF}/resume`]: () => json(detail({ state: 'active', activeVersion: 3, revision: 2, actor: { id: 'anna', kind: 'person' } }, def)),
     });
     renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} />);
-    const bar = await screen.findByRole('group', { name: 'Zustand des Workflows' });
-    expect(bar).toHaveTextContent('Pausiert: Von Hand. Version 3 startet keine neuen Läufe.');
-    await userEvent.click(within(bar).getByRole('button', { name: 'Fortsetzen' }));
-    await waitFor(() => expect(bar).toHaveTextContent('Aktiv mit Version 3.'));
+    await screen.findByRole('button', { name: 'Auslöser' });
+    expect(within(bar()).getByText('Pausiert · Version 3')).toBeInTheDocument();
+    expect(screen.getByRole('note')).toHaveTextContent('Pausiert: Akteur nicht mehr aktiv');
+    await userEvent.click(within(bar()).getByRole('button', { name: 'Fortsetzen' }));
+    await waitFor(() => expect(within(bar()).getByText('Aktiv · Version 3')).toBeInTheDocument());
     expect(calls.some(c => c.path.endsWith('/resume'))).toBe(true);
     expect(calls.some(c => c.path.endsWith('/activate'))).toBe(false);
   });
@@ -306,7 +374,7 @@ describe('StepListEditor', () => {
     });
     renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} />);
     await waitFor(() => expect(row(/^Schritt 1: Aktion/)).toHaveTextContent('1 Hinweis'));
-    await userEvent.click(screen.getByRole('button', { name: 'Aktivieren …' }));
+    await userEvent.click(within(bar()).getByRole('button', { name: 'Aktivieren …' }));
     const dialog = screen.getByRole('dialog', { name: 'Workflow aktivieren' });
     expect(within(dialog).getByText('Die Prüfung meldet noch 1 offene Stelle.')).toBeInTheDocument();
     const go = within(dialog).getByRole('button', { name: 'Aktivieren' });
@@ -339,13 +407,14 @@ describe('StepListEditor', () => {
     expect(screen.getByRole('complementary', { name: 'Detail' })).toBeInTheDocument();
   });
 
-  it('ohne workflow:manage nur lesbar: Zeilen öffnen, keine Stellen zum Einfügen', async () => {
+  it('ohne workflow:manage nur lesbar: Karten öffnen, keine Stellen zum Einfügen, kein Speicherstand', async () => {
     routes(detail({}, { steps: [{ id: 's1', end: { result: 'completed' } }] }));
     renderWith(<StepListEditor workflowId={WF} />, { perms: ['workflow:read'] });
     expect(await screen.findByText(/Zum Bearbeiten fehlt dir das Recht «Workflows bearbeiten»/)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Storno bei Zahlungsausfall' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Schritt einfügen/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Name und Beschreibung …' })).toBeNull();
+    expect(within(bar()).queryByText('Gespeichert')).toBeNull();
+    expect(within(bar()).queryByRole('button', { name: 'Weitere Aktionen' })).toBeNull();
     await userEvent.click(row(/^Schritt 1: Beenden/));
     expect(within(detailPane()).getByRole('group', { name: 'Schritt 1 bearbeiten' })).toBeDisabled();
   });

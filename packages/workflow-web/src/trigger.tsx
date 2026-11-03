@@ -40,6 +40,13 @@ export const validTimeZone = (tz: string) => {
 };
 const localZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Zurich'; } catch { return 'Europe/Zurich'; } };
 
+/** Neuer Auslöser einer Art mit sinnvollen Vorgaben (erstes Ereignis der App, werktags 07:00, von Hand). */
+export function triggerOfKind(kind: 'event' | 'schedule' | 'manual', meta: WorkflowMetaJson | undefined): Trigger {
+  if (kind === 'event') return { event: meta?.events.find(e => !e.builtin)?.type ?? '' };
+  if (kind === 'schedule') return { schedule: { cron: '0 7 * * 1-5', timezone: localZone() } };
+  return { manual: {} };
+}
+
 /** Auslöser als Satz (Kopf, Zusammenfassung beim Aktivieren). */
 export function describeTrigger(t: Trigger, meta: WorkflowMetaJson | undefined): string {
   if ('event' in t) {
@@ -61,11 +68,7 @@ export function TriggerEditor({ trigger, onChange, meta, readOnly, errors }: {
   const { ui } = useWorkflow();
   const id = useId();
   const kind = 'event' in trigger ? 'event' : 'schedule' in trigger ? 'schedule' : 'manual' in trigger ? 'manual' : 'other';
-  const setKind = (k: string) => {
-    if (k === 'event') onChange({ event: meta?.events.find(e => !e.builtin)?.type ?? '' });
-    else if (k === 'schedule') onChange({ schedule: { cron: '0 7 * * 1-5', timezone: localZone() } });
-    else onChange({ manual: {} });
-  };
+  const setKind = (k: string) => onChange(triggerOfKind(k === 'event' || k === 'schedule' ? k : 'manual', meta));
   const appEvents = meta?.events.filter(e => !e.builtin) ?? [];
   const ownEvents = meta?.events.filter(e => e.builtin) ?? [];
   return (
