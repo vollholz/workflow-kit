@@ -10,6 +10,22 @@ folgen die Angaben für die Entwickler der App.
 
 ## [Unveröffentlicht]
 
+## [0.5.0] – 2026-11-03
+
+### Für Nutzer
+
+- Beim Zeitplan eines Workflows erscheinen die nächsten Ausführungen, berechnet in der gewählten Zeitzone.
+
+### Für den Betrieb
+
+- (keine)
+
+### Hinzugefügt
+
+- Route `POST /workflows/schedule-preview` (`{ cron, timezone, count? }` → `{ ok, error, next }`, höchstens 10 Termine):
+  rechnet mit `nextCronTime` (Zeitzone, Sommerzeit); eine ungültige Angabe ist `ok: false` mit `error`, kein 422. Wie
+  `validate` hinter dem Opt-in des Mandanten, ohne Recht am Bereich (liest keine Daten).
+
 ## [0.4.0] – 2026-11-03
 
 ### Für Nutzer

@@ -1,12 +1,14 @@
 /**
- * Auslöser im Kopf des Editors (Konzept 4.2): Ereignis der App (Auswahl aus `/workflows/meta`, Filter als Bedingung in
- * Klartext), Zeitplan (Cron mit Zeitzone und Beschreibung in Worten) oder von Hand (Bezeichnung des Knopfs und
- * Eingabeformular). Zustandswechsel und Unterablauf folgen in späteren Stufen und werden nur angezeigt.
+ * Auslöser im Detailbereich des Editors (Konzept 4.2; UX-Neukonzept Etappe 2): oben der Satz zum Auslöser, darunter
+ * Ereignis der App (Auswahl aus `/workflows/meta`, Filter als Bedingung in Klartext), Zeitplan (Auswahl: täglich,
+ * werktags, an Wochentagen, monatlich, stündlich; eigener Cron-Ausdruck als Ausweg) oder von Hand (Bezeichnung des
+ * Knopfs und Eingabeformular). Zustandswechsel und Unterablauf folgen in späteren Stufen und werden nur angezeigt.
  *
- * Regel: Die nächsten Ausführungen eines Zeitplans berechnet der Server (Zeitzone, Sommerzeit); die Oberfläche
- * beschreibt einfache Muster in Worten und prüft nur die Zeitzone.
+ * Regel: Die nächsten Ausführungen eines Zeitplans berechnet der Server (`POST /workflows/schedule-preview`: Zeitzone,
+ * Sommerzeit); die Oberfläche übersetzt nur zwischen Auswahl und Cron.
  */
-import { useId } from 'react';
+import { useEffect, useId, useState } from 'react';
+import { useSchedulePreview } from './api.ts';
 import { ConditionBuilder, describeCondition } from './conditions.tsx';
 import { eventFilterFields } from './placeholders.tsx';
 import { useWorkflow } from './provider.tsx';
@@ -69,6 +71,7 @@ export function TriggerEditor({ trigger, onChange, meta, readOnly, errors }: {
   return (
     <fieldset className="wf-trigger" disabled={readOnly}>
       <legend>Auslöser</legend>
+      <p className="wf-trigger-sum">{describeTrigger(trigger, meta)}</p>
       <div className="wf-field">
         <label htmlFor={`${id}-k`}>Starten</label>
         <ui.Select id={`${id}-k`} value={kind} onChange={e => setKind(e.target.value)}>
@@ -98,28 +101,9 @@ export function TriggerEditor({ trigger, onChange, meta, readOnly, errors }: {
           </div>
         </>
       ) : null}
-      {'schedule' in trigger ? (
-        <>
-          <div className="wf-row">
-            <div className="wf-field">
-              <label htmlFor={`${id}-c`}>Zeitplan (Cron: Minute Stunde Tag Monat Wochentag)</label>
-              <ui.Input id={`${id}-c`} value={trigger.schedule.cron} aria-describedby={`${id}-ch`} onChange={e => onChange({ schedule: { ...trigger.schedule, cron: e.target.value } })} />
-            </div>
-            <div className="wf-field">
-              <label htmlFor={`${id}-z`}>Zeitzone</label>
-              <ui.Input id={`${id}-z`} value={trigger.schedule.timezone} aria-invalid={!validTimeZone(trigger.schedule.timezone)} onChange={e => onChange({ schedule: { ...trigger.schedule, timezone: e.target.value } })} />
-            </div>
-          </div>
-          <p id={`${id}-ch`} className="wf-hint" aria-live="polite">
-            {describeCron(trigger.schedule.cron) ? `Läuft ${describeCron(trigger.schedule.cron)} (${trigger.schedule.timezone}).` : 'Eigener Zeitplan.'}
-            {' '}Die nächsten Ausführungen berechnet der Server beim Aktivieren.
-            {!validTimeZone(trigger.schedule.timezone) ? ' Unbekannte Zeitzone.' : ''}
-          </p>
-        </>
-      ) : null}
+      {'schedule' in trigger ? <ScheduleEditor schedule={trigger.schedule} onChange={schedule => onChange({ schedule })} /> : null}
       {'manual' in trigger ? <ManualEditor trigger={trigger} onChange={onChange} /> : null}
       {errors.length ? <ul className="wf-step-errors" aria-label="Hinweise zum Auslöser">{errors.map((e, i) => <li key={i}>{e.message}</li>)}</ul> : null}
-      <p className="wf-trigger-sum">{describeTrigger(trigger, meta)}</p>
     </fieldset>
   );
 }
@@ -153,8 +137,145 @@ function ManualEditor({ trigger, onChange }: { trigger: { manual: { label?: stri
             <ui.Button size="sm" variant="ghost" aria-label={`Feld ${i + 1} entfernen`} onClick={() => setForm(form.filter((_, j) => j !== i))}>✕</ui.Button>
           </div>
         ))}
-        <ui.Button size="sm" onClick={() => setForm([...form, { key: `feld${form.length + 1}`, label: '', type: 'text' }])}>Eingabefeld hinzufügen</ui.Button>
+        <ui.Button size="sm" variant="ghost" className="wf-addlink" onClick={() => setForm([...form, { key: `feld${form.length + 1}`, label: '', type: 'text' }])}>Eingabefeld hinzufügen</ui.Button>
       </div>
     </>
+  );
+}
+
+// ---------------------------------------------------------------- Zeitplan als Auswahl
+
+type Rhythm = 'daily' | 'workdays' | 'weekly' | 'monthly' | 'hourly' | 'custom';
+/** Zeitplan in der Auswahl: Rhythmus, Uhrzeit «HH:MM», Wochentage (Cron 0 = Sonntag), Tag im Monat, Minute. */
+export interface SchedulePlan { rhythm: Rhythm; time: string; days: number[]; dom: number; minute: number }
+
+const RHYTHM_LABEL: Record<Rhythm, string> = {
+  daily: 'täglich', workdays: 'werktags (Mo–Fr)', weekly: 'an bestimmten Wochentagen', monthly: 'monatlich', hourly: 'stündlich', custom: 'eigener Cron-Ausdruck',
+};
+const WEEK = [1, 2, 3, 4, 5, 6, 0];
+const DEFAULT_PLAN: SchedulePlan = { rhythm: 'workdays', time: '07:00', days: [1], dom: 1, minute: 0 };
+
+/** Einfache Cron-Muster als Auswahl; alles andere ist «eigener Cron-Ausdruck». */
+export function planOfCron(cron: string): SchedulePlan {
+  const f = cron.trim().split(/\s+/);
+  const custom = { ...DEFAULT_PLAN, rhythm: 'custom' as const };
+  if (f.length !== 5) return custom;
+  const [m, h, dom, mon, dow] = f as [string, string, string, string, string];
+  const num = (v: string) => /^\d+$/.test(v);
+  if (mon !== '*' || !num(m)) return custom;
+  if (h === '*' && dom === '*' && dow === '*') return { ...DEFAULT_PLAN, rhythm: 'hourly', minute: Number(m) };
+  if (!num(h)) return custom;
+  const time = `${two(h)}:${two(m)}`;
+  if (dom === '*' && dow === '*') return { ...DEFAULT_PLAN, rhythm: 'daily', time };
+  if (dom === '*' && dow === '1-5') return { ...DEFAULT_PLAN, rhythm: 'workdays', time };
+  if (dom === '*' && /^[0-7](,[0-7])*$/.test(dow)) return { ...DEFAULT_PLAN, rhythm: 'weekly', time, days: [...new Set(dow.split(',').map(d => Number(d) % 7))] };
+  if (num(dom) && dow === '*') return { ...DEFAULT_PLAN, rhythm: 'monthly', time, dom: Number(dom) };
+  return custom;
+}
+
+/** Auswahl → Cron (fünf Felder); `custom` behält den bisherigen Ausdruck. */
+export function cronOfPlan(p: SchedulePlan, current: string): string {
+  const [h, m] = (/^(\d{1,2}):(\d{2})$/.exec(p.time) ?? [, '7', '00']).slice(1).map(Number) as [number, number];
+  switch (p.rhythm) {
+    case 'daily': return `${m} ${h} * * *`;
+    case 'workdays': return `${m} ${h} * * 1-5`;
+    case 'weekly': return `${m} ${h} * * ${(p.days.length ? [...p.days].sort((a, b) => WEEK.indexOf(a) - WEEK.indexOf(b)) : [1]).join(',')}`;
+    case 'monthly': return `${m} ${h} ${Math.min(31, Math.max(1, p.dom))} * *`;
+    case 'hourly': return `${Math.min(59, Math.max(0, p.minute))} * * * *`;
+    default: return current;
+  }
+}
+
+function timeZones(current: string): string[] {
+  const all = typeof (Intl as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf === 'function'
+    ? (Intl as unknown as { supportedValuesOf: (k: string) => string[] }).supportedValuesOf('timeZone') : [];
+  return all.includes(current) ? all : [current, ...all];
+}
+
+function useDebouncedValue<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value);
+  useEffect(() => { const t = setTimeout(() => setV(value), ms); return () => clearTimeout(t); }, [value, ms]);
+  return v;
+}
+
+function ScheduleEditor({ schedule, onChange }: { schedule: { cron: string; timezone: string }; onChange: (s: { cron: string; timezone: string }) => void }) {
+  const { ui } = useWorkflow();
+  const id = useId();
+  const [plan, setPlan] = useState<SchedulePlan>(() => planOfCron(schedule.cron));
+  const cron = useDebouncedValue(schedule.cron, 300);
+  const preview = useSchedulePreview(cron, schedule.timezone);
+  const update = (p: SchedulePlan) => { setPlan(p); if (p.rhythm !== 'custom') onChange({ ...schedule, cron: cronOfPlan(p, schedule.cron) }); };
+  const zones = timeZones(schedule.timezone);
+  const fmt = (iso: string) => {
+    try {
+      return new Intl.DateTimeFormat('de-CH', { timeZone: schedule.timezone, weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
+    } catch { return iso; }
+  };
+  return (
+    <div className="wf-schedule">
+      <div className="wf-row">
+        <div className="wf-field">
+          <label htmlFor={`${id}-r`}>Wiederholen</label>
+          <ui.Select id={`${id}-r`} value={plan.rhythm} onChange={e => update({ ...plan, rhythm: e.target.value as Rhythm })}>
+            {(Object.keys(RHYTHM_LABEL) as Rhythm[]).map(r => <option key={r} value={r}>{RHYTHM_LABEL[r]}</option>)}
+          </ui.Select>
+        </div>
+        {plan.rhythm === 'monthly' ? (
+          <div className="wf-field">
+            <label htmlFor={`${id}-d`}>am Tag</label>
+            <ui.Input id={`${id}-d`} type="number" min={1} max={31} className="wf-num" value={plan.dom} onChange={e => update({ ...plan, dom: Number(e.target.value) || 1 })} />
+          </div>
+        ) : null}
+        {plan.rhythm === 'hourly' ? (
+          <div className="wf-field">
+            <label htmlFor={`${id}-m`}>zur Minute</label>
+            <ui.Input id={`${id}-m`} type="number" min={0} max={59} className="wf-num" value={plan.minute} onChange={e => update({ ...plan, minute: Number(e.target.value) || 0 })} />
+          </div>
+        ) : null}
+        {plan.rhythm !== 'hourly' && plan.rhythm !== 'custom' ? (
+          <div className="wf-field">
+            <label htmlFor={`${id}-t`}>um</label>
+            <ui.Input id={`${id}-t`} type="time" value={plan.time} onChange={e => update({ ...plan, time: e.target.value || '07:00' })} />
+          </div>
+        ) : null}
+      </div>
+      {plan.rhythm === 'weekly' ? (
+        <fieldset className="wf-field wf-days">
+          <legend>an</legend>
+          <div className="wf-row">
+            {WEEK.map(d => (
+              <span key={d} className="wf-check-row">
+                <input type="checkbox" className="wf-check" id={`${id}-w${d}`} checked={plan.days.includes(d)}
+                  onChange={e => update({ ...plan, days: e.target.checked ? [...plan.days, d] : plan.days.filter(x => x !== d) })} />
+                <label htmlFor={`${id}-w${d}`}>{DAYS[d]}</label>
+              </span>
+            ))}
+          </div>
+        </fieldset>
+      ) : null}
+      {plan.rhythm === 'custom' ? (
+        <div className="wf-field">
+          <label htmlFor={`${id}-c`}>Cron-Ausdruck (Minute Stunde Tag Monat Wochentag)</label>
+          <ui.Input id={`${id}-c`} value={schedule.cron} onChange={e => onChange({ ...schedule, cron: e.target.value })} />
+        </div>
+      ) : null}
+      <div className="wf-field">
+        <label htmlFor={`${id}-z`}>Zeitzone</label>
+        {zones.length > 1 ? (
+          <ui.Select id={`${id}-z`} value={schedule.timezone} onChange={e => onChange({ ...schedule, timezone: e.target.value })}>
+            {zones.map(z => <option key={z} value={z}>{z}</option>)}
+          </ui.Select>
+        ) : (
+          <ui.Input id={`${id}-z`} value={schedule.timezone} aria-invalid={!validTimeZone(schedule.timezone)} onChange={e => onChange({ ...schedule, timezone: e.target.value })} />
+        )}
+      </div>
+      <div className="wf-next" aria-live="polite">
+        {preview.data?.ok ? (
+          <><span className="wf-label">Nächste Ausführungen</span><ul className="wf-plain">{preview.data.next.map(t => <li key={t}>{fmt(t)}</li>)}</ul></>
+        ) : preview.data && !preview.data.ok ? <p className="wf-bad">{preview.data.error}</p>
+          : preview.isError ? <p className="wf-hint">Die nächsten Ausführungen berechnet der Server beim Aktivieren.</p> : null}
+      </div>
+      {plan.rhythm !== 'custom' ? <details className="wf-step-more"><summary>Cron-Ausdruck</summary><code>{schedule.cron}</code></details> : null}
+    </div>
   );
 }

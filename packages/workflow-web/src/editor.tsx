@@ -1,7 +1,8 @@
 /**
- * Editor eines Workflows (Konzept Abschnitt 10, W4; UX-Neukonzept Etappe 1): Kopf mit Name und einem Satz zum
- * Workflow, Statusleiste (aktive Version, Entwurf, Hauptaktion je Zustand), darunter Auslöser, Schrittliste und
- * Probelauf.
+ * Editor eines Workflows (Konzept Abschnitt 10, W4; UX-Neukonzept Etappen 1 und 2): Kopf mit Name und einem Satz zum
+ * Workflow, Statusleiste (aktive Version, Entwurf, Hauptaktion je Zustand), darunter links der Ablauf (Start,
+ * Schritte mit Wegen, «+» an jeder Stelle) und rechts der Detailbereich: Auslöser, Formular des gewählten Schritts,
+ * Auswahl eines neuen Schritts oder – im Modus «Probelauf» – der Probelauf.
  *
  * Regeln:
  * - Bearbeitet wird immer der Entwurf. Er speichert sich selbst (entprellt, `If-Match` mit dem Stand); solange etwas
@@ -13,20 +14,23 @@
  * - Prüfung live: Nach jeder Änderung (verzögert) prüft `POST /workflows/validate`; Meldungen stehen am Schritt.
  *   Knöpfe sind nicht vorab gesperrt: Aktivieren nennt offene Stellen im Dialog.
  * - Ein entfernter Schritt lässt sich mit «Rückgängig» zurückholen; der Fokus springt auf diesen Knopf.
+ * - Einfügen, Entfernen und Verschieben laufen über Pfade (`flow.tsx`); nach dem Einfügen ist der neue Schritt gewählt.
+ * - Versionen und Name/Beschreibung stehen in eigenen Bausteinen (`VersionList`, `WorkflowSettings`); mit
+ *   `onOpenSettings` öffnet «Name und Beschreibung …» diese statt des Dialogs.
  * - Probelauf und Hinweise nennen Schritte mit Nummer und Titel, nicht mit ihrer ID.
  * - Ohne `workflow:manage` (oder archiviert, oder eine Art späterer Stufen) ist alles nur lesbar.
  */
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   useDeleteWorkflow, useDryRun, useSaveWorkflow, useValidateDefinition, useWorkflowDetail, useWorkflowLifecycle, useWorkflowMeta, useWorkflowVersion,
-  useWorkflowVersions,
 } from './api.ts';
+import { FlowView, listAt, numberOf, splitPath, StepDetail, stepAt, StepPicker, withList, type FlowSelection } from './flow.tsx';
 import { contextFields, walk } from './placeholders.tsx';
 import { ActorName, useWorkflow, type WorkflowActor } from './provider.tsx';
-import { EditorCtx, placeOfPath, StepList, stepNumberOfPath, stepTitle, type EditorContext } from './steps.tsx';
+import { EditorCtx, placeOfPath, stepNumberOfPath, stepTitle, type EditorContext } from './steps.tsx';
 import { describeCron, describeTrigger, TriggerEditor } from './trigger.tsx';
 import type { AutomationDefinition, DefinitionError, DryRunJson, Step, WorkflowDefinition, WorkflowDetail, WorkflowMetaJson } from './types.ts';
-import { Badge, fmtDateTime, fmtTime, MissingRight, STATE_LABEL, stateTone, WorkflowApiError } from './ui.tsx';
+import { Badge, fmtTime, MissingRight, STATE_LABEL, stateTone, WorkflowApiError } from './ui.tsx';
 
 export interface StepListEditorProps {
   workflowId?: string | null;
@@ -40,6 +44,8 @@ export interface StepListEditorProps {
   saveDelayMs?: number;
   /** Name als Überschrift zeigen (Standard `true`); `false`, wenn die App ihn im Seitenkopf zeigt. */
   showTitle?: boolean;
+  /** Einstellungen des Workflows öffnen (Name, Beschreibung); ohne Angabe ein Dialog im Editor. */
+  onOpenSettings?: () => void;
 }
 
 interface Draft { name: string; description: string; definition: WorkflowDefinition }
@@ -55,7 +61,7 @@ function useDebounced<T>(value: T, ms: number): T {
   return v;
 }
 
-export function StepListEditor({ workflowId, onDeleted, onShowRuns, validateDelayMs = 400, saveDelayMs = 800, showTitle = true }: StepListEditorProps) {
+export function StepListEditor({ workflowId, onDeleted, onShowRuns, validateDelayMs = 400, saveDelayMs = 800, showTitle = true, onOpenSettings }: StepListEditorProps) {
   const w = useWorkflow();
   const { ui } = w;
   const detail = useWorkflowDetail(workflowId);
@@ -64,15 +70,15 @@ export function StepListEditor({ workflowId, onDeleted, onShowRuns, validateDela
   if (detail.isError) return <ui.ErrorBox error={detail.error} onRetry={() => void detail.refetch()} />;
   return (
     <EditorLoaded key={detail.data.id} detail={detail.data} refetch={async () => (await detail.refetch()).data} onDeleted={onDeleted} onShowRuns={onShowRuns}
-      validateDelayMs={validateDelayMs} saveDelayMs={saveDelayMs} showTitle={showTitle} />
+      validateDelayMs={validateDelayMs} saveDelayMs={saveDelayMs} showTitle={showTitle} onOpenSettings={onOpenSettings} />
   );
 }
 
 type DialogName = 'activate' | 'archive' | 'delete' | 'discard' | 'details';
 
-function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs, saveDelayMs, showTitle }: {
+function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs, saveDelayMs, showTitle, onOpenSettings }: {
   detail: WorkflowDetail; refetch: () => Promise<WorkflowDetail | undefined>; onDeleted?: () => void; onShowRuns?: (id: string) => void;
-  validateDelayMs: number; saveDelayMs: number; showTitle: boolean;
+  validateDelayMs: number; saveDelayMs: number; showTitle: boolean; onOpenSettings?: () => void;
 }) {
   const w = useWorkflow();
   const { ui } = w;
@@ -86,6 +92,10 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
   const [notice, setNotice] = useState<string | null>(null);
   const [removed, setRemoved] = useState<{ label: string; definition: WorkflowDefinition } | null>(null);
   const undoRef = useRef<HTMLButtonElement>(null);
+  const [sel, setSel] = useState<FlowSelection>({ kind: 'trigger' });
+  const [mode, setMode] = useState<'edit' | 'sim'>('edit');
+  const detailRef = useRef<HTMLElement>(null);
+  const openDetail = useRef(false);
   const save = useSaveWorkflow(detail.id);
   const life = useWorkflowLifecycle(detail.id);
   const del = useDeleteWorkflow(detail.id);
@@ -112,11 +122,49 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
       ids.current.add(`s${n}`);
       return `s${n}`;
     },
-    onRemove: label => setRemoved({ label, definition: latest.current.draft.definition }),
   };
   const def = draft.definition as AutomationDefinition;
   const setDefinition = (d: WorkflowDefinition) => setDraft(x => ({ ...x, definition: d }));
   const adopt = (d: WorkflowDetail) => { setDraft(draftOf(d)); setBase(draftOf(d)); };
+  const steps = automation ? def.steps : [];
+  const setSteps = (next: Step[]) => setDefinition({ ...def, steps: next });
+
+  // Ablauf: Einfügen, Entfernen, Verschieben über Pfade; die Auswahl folgt dem Schritt.
+  const insert = (list: string, index: number, step: Step) => {
+    setSteps(withList(steps, list, l => [...l.slice(0, index), step, ...l.slice(index)]));
+    setSel({ kind: 'step', path: `${list}/${index}` });
+    openDetail.current = true;
+  };
+  const remove = (path: string) => {
+    const step = stepAt(steps, path);
+    if (!step) return;
+    const { list, index } = splitPath(path);
+    setRemoved({ label: `Schritt ${numberOf(path)} (${stepTitle(step, meta.data)})`, definition: latest.current.draft.definition });
+    const rest = (listAt(steps, list) ?? []).length - 1;
+    setSteps(withList(steps, list, l => l.filter((_, j) => j !== index)));
+    setSel(rest > 0 ? { kind: 'step', path: `${list}/${Math.min(index, rest - 1)}` } : list === '/steps' ? { kind: 'trigger' } : { kind: 'step', path: list.slice(0, list.lastIndexOf('/')) });
+  };
+  const move = (path: string, delta: -1 | 1): string | null => {
+    const { list, index } = splitPath(path);
+    const items = listAt(steps, list) ?? [];
+    const j = index + delta;
+    if (j < 0 || j >= items.length) return null;
+    setSteps(withList(steps, list, l => { const n = [...l]; [n[index], n[j]] = [n[j]!, n[index]!]; return n; }));
+    const next = `${list}/${j}`;
+    setSel({ kind: 'step', path: next });
+    return next;
+  };
+  const selected = sel.kind === 'step' ? stepAt(steps, sel.path) : undefined;
+  useEffect(() => {
+    if (!openDetail.current) return;
+    openDetail.current = false;
+    detailRef.current?.querySelector<HTMLElement>('input:not([type=hidden]):not([disabled]), select:not([disabled]), textarea:not([disabled])')?.focus();
+  }, [sel]);
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 6000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   /** Speichert den Entwurf, wie er jetzt dasteht; gespeichert ist danach genau das Gesendete. */
   const doSave = async (revision = latest.current.revision): Promise<WorkflowDetail | null> => {
@@ -227,7 +275,7 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
           </div>
           <div className="wf-editor-actions">
             <Badge tone={stateTone(detail.state)}>{STATE_LABEL[detail.state]}{detail.activeVersion ? ` · Version ${detail.activeVersion}` : ''}</Badge>
-            {!readOnly ? <ui.Button size="sm" variant="ghost" onClick={() => setDialog('details')}>Name und Beschreibung …</ui.Button> : null}
+            {!readOnly ? <ui.Button size="sm" variant="ghost" onClick={() => (onOpenSettings ? onOpenSettings() : setDialog('details'))}>Name und Beschreibung …</ui.Button> : null}
             {onShowRuns ? <ui.Button size="sm" variant="ghost" onClick={() => onShowRuns(detail.id)}>Läufe ansehen</ui.Button> : null}
           </div>
         </header>
@@ -244,27 +292,41 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
         {life.resume.isError ? <ui.ErrorBox error={life.resume.error} /> : null}
         {meta.isError ? <ui.ErrorBox error={meta.error} onRetry={() => void meta.refetch()} /> : null}
         {automation ? (
-          <div className="wf-editor-grid">
-            <div className="wf-editor-main">
-              <TriggerEditor trigger={def.trigger} meta={meta.data} readOnly={readOnly} errors={triggerErrors} onChange={trigger => setDefinition({ ...def, trigger })} />
-              <section className="wf-section" aria-labelledby={`${detail.id}-s`}>
-                <h3 id={`${detail.id}-s`}>Schritte</h3>
-                <StepList steps={def.steps} onChange={(steps: Step[]) => setDefinition({ ...def, steps })} path="/steps" number="" title="Schritte" />
-              </section>
-              {removed ? (
-                <div className="wf-undo" role="status">
-                  <span className="wf-grow">{`${removed.label} entfernt.`}</span>
-                  <ui.Button ref={undoRef} size="sm" onClick={() => { setDefinition(removed.definition); setRemoved(null); setNotice('Schritt wiederhergestellt.'); }}>Rückgängig</ui.Button>
-                  <ui.Button size="sm" variant="ghost" aria-label="Hinweis schliessen" onClick={() => setRemoved(null)}>✕</ui.Button>
-                </div>
-              ) : null}
+          <>
+            <div className="wf-editor-tools">
+              <div className="wf-seg" role="group" aria-label="Ansicht">
+                <button type="button" aria-pressed={mode === 'edit'} onClick={() => setMode('edit')}>Bearbeiten</button>
+                <button type="button" aria-pressed={mode === 'sim'} onClick={() => setMode('sim')}>Probelauf</button>
+              </div>
               <ValidationSummary pending={validation.isFetching} ok={!errors.length && !!validation.data} errors={otherErrors} total={errors.length} readOnly={readOnly} />
             </div>
-            <aside className="wf-editor-side">
-              <DryRunPanel workflowId={detail.id} definition={def} meta={meta.data} />
-              <Versions workflowId={detail.id} />
-            </aside>
-          </div>
+            <div className="wf-editor-grid">
+              <div className="wf-editor-main">
+                <FlowView steps={steps} trigger={describeTrigger(def.trigger, meta.data)} sel={sel}
+                  onSelect={s => { setSel(s); if (mode === 'sim') setMode('edit'); }} onMove={move} onRemove={remove} onOpen={() => { openDetail.current = true; setSel(x => ({ ...x })); }} />
+                {removed ? (
+                  <div className="wf-undo" role="status">
+                    <span className="wf-grow">{`${removed.label} entfernt.`}</span>
+                    <ui.Button ref={undoRef} size="sm" onClick={() => { setDefinition(removed.definition); setRemoved(null); setNotice('Schritt wiederhergestellt.'); }}>Rückgängig</ui.Button>
+                    <ui.Button size="sm" variant="ghost" aria-label="Hinweis schliessen" onClick={() => setRemoved(null)}>✕</ui.Button>
+                  </div>
+                ) : null}
+              </div>
+              <aside className="wf-editor-side wf-detail" ref={detailRef} aria-label={mode === 'sim' ? 'Probelauf' : 'Detail'}>
+                {mode === 'sim' ? <DryRunPanel workflowId={detail.id} definition={def} meta={meta.data} />
+                  : sel.kind === 'insert' ? (
+                    <StepPicker where={sel.list === '/steps' && sel.index === 0 ? 'am Anfang' : sel.index === 0 ? `am Anfang von ${laneName(sel.list)}` : `nach Schritt ${numberOf(`${sel.list}/${sel.index - 1}`)}`}
+                      onPick={step => insert(sel.list, sel.index, step)} onCancel={() => setSel({ kind: 'trigger' })} />
+                  ) : selected && sel.kind === 'step' ? (
+                    <StepDetail key={sel.path} step={selected} path={sel.path} last={splitPath(sel.path).index >= (listAt(steps, splitPath(sel.path).list)?.length ?? 1) - 1}
+                      onChange={s => { const { list, index } = splitPath(sel.path); setSteps(withList(steps, list, l => l.map((x, j) => (j === index ? s : x)))); }}
+                      onRemove={() => remove(sel.path)} onMove={d => { move(sel.path, d); }} />
+                  ) : (
+                    <TriggerEditor trigger={def.trigger} meta={meta.data} readOnly={readOnly} errors={triggerErrors} onChange={trigger => setDefinition({ ...def, trigger })} />
+                  )}
+              </aside>
+            </div>
+          </>
         ) : null}
       </div>
       {conflict ? (
@@ -425,26 +487,9 @@ function ActivateDialog({ detail, definition, meta, dirty, errors, onClose, onAc
   );
 }
 
-// ---------------------------------------------------------------- Versionen
-
-function Versions({ workflowId }: { workflowId: string }) {
-  const v = useWorkflowVersions(workflowId);
-  if (!v.data?.items.length) return null;
-  return (
-    <details className="wf-section">
-      <summary>Versionen ({v.data.items.length})</summary>
-      <ul className="wf-plain">
-        {v.data.items.map(x => (
-          <li key={x.version}>
-            <b>Version {x.version}</b>{x.active ? ' · aktiv' : ''} · {fmtDateTime(x.activatedAt)} · handelt als <ActorName actor={x.actor} />
-          </li>
-        ))}
-      </ul>
-    </details>
-  );
-}
-
 // ---------------------------------------------------------------- Probelauf
+
+const laneName = (list: string) => (list.endsWith('/then') ? `«Dann» in Schritt ${numberOf(list.slice(0, list.lastIndexOf('/')))}` : list.endsWith('/else') ? `«Sonst» in Schritt ${numberOf(list.slice(0, list.lastIndexOf('/')))}` : `der Schleife in Schritt ${numberOf(list.slice(0, list.lastIndexOf('/')))}`);
 
 const RESULT_LABEL: Record<DryRunJson['result'], string> = { completed: 'würde erfolgreich enden', failed: 'würde scheitern', cancelled: 'würde abgebrochen', limit: 'würde an eine Grenze stossen' };
 

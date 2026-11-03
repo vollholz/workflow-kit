@@ -173,6 +173,16 @@ export function useValidateDefinition(definition: WorkflowDefinition | null) {
   });
 }
 
+/** Nächste Ausführungen eines Zeitplans (Cron und Zeitzone rechnet der Server); `ok: false` mit `error` bei ungültiger Angabe. */
+export function useSchedulePreview(cron: string, timezone: string, enabled = true) {
+  const w = useWorkflow();
+  return useQuery({
+    queryKey: ['workflow', 'schedule-preview', cron, timezone] as const, enabled: enabled && !!cron.trim() && !!timezone.trim(),
+    staleTime: 60_000, placeholderData: keepPreviousData,
+    queryFn: ({ signal }) => wfRequest<{ ok: boolean; error: string | null; next: string[] }>(w, 'POST', '/workflows/schedule-preview', { body: { cron, timezone, count: 3 }, signal }),
+  });
+}
+
 /** Aktivieren (mit Akteur), Pausieren, Fortsetzen (gleiche Version), Archivieren. */
 export function useWorkflowLifecycle(id: string) {
   const w = useWorkflow();

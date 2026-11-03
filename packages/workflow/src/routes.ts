@@ -288,6 +288,28 @@ export function registerRoutes(app: FastifyInstance, o: RouteOptions): void {
     return { ok: !stage.length, errors: [], stage };
   }));
 
+  // Nächste Ausführungen eines Zeitplans (Editor): Zeitzone und Sommerzeit rechnet nur der Server.
+  app.post(`${prefix}/workflows/schedule-preview`, {
+    attachValidation: true,
+    schema: {
+      body: {
+        type: 'object', additionalProperties: false, required: ['cron', 'timezone'],
+        properties: { cron: { type: 'string', maxLength: 200 }, timezone: { type: 'string', maxLength: 100 }, count: { type: 'integer', minimum: 1, maximum: 10, default: 5 } },
+      },
+    },
+  }, async req => handle(req, true, async () => {
+    const b = req.body as { cron: string; timezone: string; count: number };
+    if (!isValidTimeZone(b.timezone)) return { ok: false, error: `Unbekannte Zeitzone «${b.timezone}»`, next: [] };
+    const next: string[] = [];
+    try {
+      let at = new Date();
+      for (let i = 0; i < b.count; i++) { at = nextCronTime(b.cron, b.timezone, at); next.push(at.toISOString()); }
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e), next: [] };
+    }
+    return { ok: true, error: null, next };
+  }));
+
   app.get(`${prefix}/workflows`, {
     attachValidation: true,
     schema: { querystring: { type: 'object', properties: { state: { enum: ['draft', 'active', 'paused', 'archived'] }, scopeType: { type: 'string' }, scopeId: { type: 'string' } } } },
