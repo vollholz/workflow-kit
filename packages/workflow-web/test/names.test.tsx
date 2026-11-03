@@ -131,32 +131,50 @@ describe('Editor: Personen und Namen', () => {
     ]);
     renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} />, { perms: [...ALL, 'queue:manage'], props: { actors: { Name } } });
     expect(await screen.findByText('Aufgabe «Prüfen» für Warteschlange Verkauf')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText(/Genehmigung «Freigabe» bei/)).toHaveTextContent('Genehmigung «Freigabe» bei Ben Beispiel, Team Team Verkauf'));
+    await waitFor(() => expect(screen.getByText(/Genehmigung «Freigabe» bei/)).toHaveTextContent('Genehmigung «Freigabe» bei Ben Beispiel, Team Verkauf'));
     expect(screen.queryByText(new RegExp(Q1))).toBeNull();
   });
 
-  it('Person mit der Suche der App wählen; ohne Suche das ID-Feld wie bisher', async () => {
+  it('Zuständig: eine Auswahl mit Suche, gruppiert; Personen nie zusätzlich als Team; ohne Suche der App per ID', async () => {
     const { calls } = setup([{ id: 's1', task: { title: 'Prüfen', assignee: { actor: { id: '', kind: 'person' } } } }]);
     const search = vi.fn(async (q: string) => [{ id: 'ben', kind: 'person' as const, label: `Ben (${q})` }, { id: 'cara', kind: 'person' as const }]);
-    const { unmount } = renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} />, { props: { actors: { Name, search } } });
+    const { unmount } = renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} saveDelayMs={0} />, { perms: [...ALL, 'queue:manage'], props: { actors: { Name, search } } });
     const card = await screen.findByRole('region', { name: /Schritt 1: Aufgabe/ });
     const group = await within(card).findByRole('group', { name: 'Zuständig' });
-    expect(within(group).getByText('Noch keine Person gewählt.')).toBeInTheDocument();
+    expect(within(group).getByText('Noch niemand gewählt.')).toBeInTheDocument();
     expect(within(card).queryByLabelText('Zuständig: ID der Person')).toBeNull();
-    await userEvent.type(within(group).getByRole('searchbox', { name: 'Zuständig: Person suchen' }), 'be');
-    const hits = await within(group).findByRole('list', { name: 'Zuständig: Treffer' });
+    await userEvent.type(within(group).getByRole('combobox', { name: 'Zuständig: suchen' }), 'be');
+    const list = await within(group).findByRole('listbox', { name: 'Zuständig: Auswahl' });
     expect(search).toHaveBeenLastCalledWith('be');
-    await userEvent.click(within(hits).getByRole('button', { name: 'Cara Muster' }));
-    expect(within(group).getByText('Cara Muster')).toBeInTheDocument();
+    await waitFor(() => expect(within(list).getByRole('group', { name: 'Personen' })).toHaveTextContent('Cara Muster'));
+    expect(within(list).getByRole('group', { name: 'Weitere' })).toHaveTextContent('Person aus einem Feld …');
+    await userEvent.click(within(list).getByRole('option', { name: 'Cara Muster' }));
+    expect(within(group).getByText(/^Person: Cara Muster$/)).toBeInTheDocument();
+    expect(within(group).queryByRole('listbox')).toBeNull();
     expect(screen.getByText('Aufgabe «Prüfen» für Cara Muster')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Speichern' }));
-    await waitFor(() => expect(calls.some(c => c.method === 'PUT')).toBe(true));
-    const steps = (calls.find(c => c.method === 'PUT')!.body as { definition: { steps: unknown[] } }).definition.steps;
-    expect(steps).toEqual([{ id: 's1', task: { title: 'Prüfen', assignee: { actor: { id: 'cara', kind: 'person' } } } }]);
+    await waitFor(() => expect((calls.filter(c => c.method === 'PUT').at(-1)?.body as { definition: { steps: unknown[] } } | undefined)?.definition.steps)
+      .toEqual([{ id: 's1', task: { title: 'Prüfen', assignee: { actor: { id: 'cara', kind: 'person' } } } }]));
     unmount();
     renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} />);
     const card2 = await screen.findByRole('region', { name: /Schritt 1: Aufgabe/ });
-    expect(within(card2).getByLabelText('Zuständig: ID der Person')).toBeInTheDocument();
+    await userEvent.type(within(card2).getByRole('combobox', { name: 'Zuständig: suchen' }), 'cara');
+    expect(await within(card2).findByRole('option', { name: 'Person mit der ID «cara»' })).toBeInTheDocument();
+  });
+
+  it('Zuständig per Tastatur: Team aus der Gruppe der App wählen', async () => {
+    const { calls } = setup([{ id: 's1', task: { title: 'Prüfen', assignee: { actor: { id: '', kind: 'person' } } } }]);
+    renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} saveDelayMs={0} />, { perms: [...ALL, 'queue:manage'] });
+    const card = await screen.findByRole('region', { name: /Schritt 1: Aufgabe/ });
+    const box = within(card).getByRole('combobox', { name: 'Zuständig: suchen' });
+    await userEvent.type(box, 'verk');
+    const list = await within(card).findByRole('listbox', { name: 'Zuständig: Auswahl' });
+    await waitFor(() => expect(within(list).getByRole('group', { name: 'Teams' })).toHaveTextContent('Team Verkauf'));
+    expect(within(list).getByRole('group', { name: 'Warteschlangen' })).toHaveTextContent('Verkauf');
+    await userEvent.keyboard('{ArrowDown}');
+    expect(within(list).getByRole('option', { name: 'Team Verkauf' })).toHaveAttribute('aria-selected', 'true');
+    await userEvent.keyboard('{Enter}');
+    await waitFor(() => expect((calls.filter(c => c.method === 'PUT').at(-1)?.body as { definition: { steps: { task: { assignee: unknown } }[] } } | undefined)?.definition.steps[0]!.task.assignee)
+      .toEqual({ team: { type: 'role', id: 'sales' } }));
   });
 });
 

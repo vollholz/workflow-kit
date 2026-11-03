@@ -10,6 +10,44 @@ folgen die Angaben für die Entwickler der App.
 
 ## [Unveröffentlicht]
 
+## [0.4.0] – 2026-11-03
+
+### Für Nutzer
+
+- Der Editor sagt immer, was gerade läuft: Eine Statusleiste nennt die aktive Version und ob der Entwurf davon
+  abweicht, mit genau einer Hauptaktion – «Aktivieren …», «Version 2 aktivieren …» oder «Fortsetzen». Daneben stehen
+  «Verwerfen …» (Entwurf zurück auf die aktive Version), «Pausieren», «Archivieren …» und «Löschen …».
+- Der Entwurf speichert sich selbst; der Knopf «Speichern» entfällt. Solange etwas nicht gespeichert ist, fragt der
+  Browser beim Verlassen nach.
+- Ein pausierter Workflow läuft mit «Fortsetzen» weiter, ohne neue Version.
+- Name und Beschreibung stehen im Kopf; ändern über «Name und Beschreibung …».
+- Ein entfernter Schritt lässt sich mit «Rückgängig» zurückholen.
+- Zuständige und Genehmigende wählst du in einem einzigen Feld mit Suche: Personen, Warteschlangen und Teams erscheinen
+  gruppiert, eine Person erscheint nie als Team.
+- Probelauf und Protokoll nennen Schritte mit Nummer und Titel («Schritt 1 · Aufgabe «Gerät prüfen»») statt mit ihrer
+  Kennung; Eingaben und Ausgaben stehen unter «Technische Details». Der Lauf nennt den Workflow mit Namen.
+- «Aktivieren» und «Entwurf anlegen» sind nicht mehr vorab gesperrt: Fehlt etwas, sagt der Dialog beim Absenden was.
+
+### Für den Betrieb
+
+- Braucht `@vollholz/workflow` 0.4.0 (Route `resume`).
+
+### Hinzugefügt
+
+- `StepListEditor`: `saveDelayMs` (Standard 800) und `showTitle` (Standard `true`; `false`, wenn die App den Namen im
+  Seitenkopf zeigt).
+- `useWorkflowLifecycle(id).resume`.
+- `TeamOptionJson.group?`; `TeamInput` gruppiert die Teams danach.
+- Hilfen `stepNumberOfPath`, `placeOfPath`, `stepTitle` (Schritte mit Nummer und Titel) und `fmtTime`.
+
+### Geändert
+
+- `AssigneeInput` ist eine Auswahl mit Suche (Combobox, ↓/↑, Enter, Esc) statt «Art wählen, dann Angabe»; ohne
+  `actors.search` bietet sie «Person mit der ID …» an.
+- `describeAssignee` nennt ein Team so, wie die App es bezeichnet (ohne Vorsilbe «Team», wenn die Bezeichnung bekannt
+  ist).
+- Der Editor zeigt das Feld «Name des Workflows» nur noch im Dialog «Name und Beschreibung».
+
 ## [0.3.1] – 2026-11-03
 
 ### Für Nutzer

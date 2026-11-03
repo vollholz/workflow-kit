@@ -481,7 +481,7 @@ export function registerTaskRoutes(app: FastifyInstance, o: RouteOptions, h: Tas
     const q = req.query as { q?: string; limit: number };
     if (!host.teams) return { available: false, items: [] };
     const items = await host.teams(tx, { search: q.q ?? '', limit: q.limit });
-    return { available: true, items: items.slice(0, q.limit).map(t => ({ type: t.type, id: t.id, label: t.label })) };
+    return { available: true, items: items.slice(0, q.limit).map(t => ({ type: t.type, id: t.id, label: t.label, ...(t.group ? { group: t.group } : {}) })) };
   }));
 
   async function queueOr404(tx: Tx, v: Viewer, id: string, lock = false): Promise<{ q: QueueRow; member: boolean; manage: boolean; assign: boolean }> {

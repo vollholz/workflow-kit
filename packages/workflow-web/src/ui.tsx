@@ -165,6 +165,10 @@ export function MissingRight({ perm, lead }: { perm: string; lead: string }) {
 // ---------------------------------------------------------------- Formatierung (de-CH)
 
 const dateTimeFmt = new Intl.DateTimeFormat('de-CH', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+const timeFmt = new Intl.DateTimeFormat('de-CH', { hour: '2-digit', minute: '2-digit' });
+
+/** Uhrzeit, z. B. «10:42». */
+export const fmtTime = (d: Date): string => timeFmt.format(d);
 
 export function fmtDateTime(v: string | null | undefined): string {
   if (!v) return '';

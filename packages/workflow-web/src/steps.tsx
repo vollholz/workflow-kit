@@ -4,7 +4,8 @@
  *
  * Regeln:
  * - Hinzufügen, Verschieben und Entfernen mit Knöpfen (Tastatur, kein Ziehen nötig); nach dem Verschieben bleibt der
- *   Fokus auf dem Knopf des verschobenen Schritts.
+ *   Fokus auf dem Knopf des verschobenen Schritts. Vor dem Entfernen meldet die Liste den Schritt dem Editor
+ *   (`onRemove`), der «Rückgängig» anbietet.
  * - Jeder Schritt bekommt eine eindeutige ID (`s1`, `s2` …); Verweise `steps.<id>` bleiben beim Verschieben gültig.
  * - Meldungen der Prüfung (`POST /workflows/validate`) stehen an der Karte, zu der ihr Pfad gehört; Meldungen
  *   verschachtelter Schritte an deren Karte.
@@ -26,6 +27,8 @@ export interface EditorContext {
   errors: DefinitionError[];
   readOnly: boolean;
   newId: () => string;
+  /** Wird aufgerufen, bevor ein Schritt entfernt wird (für «Rückgängig»); der Editor setzt dann den Fokus. */
+  onRemove?: (label: string) => void;
 }
 export const EditorCtx = createContext<EditorContext | null>(null);
 const useEditor = () => {
@@ -114,6 +117,31 @@ export function ownErrors(errors: DefinitionError[], path: string): DefinitionEr
   });
 }
 
+/** Nummer eines Schritts aus seinem Pfad, wie die Liste sie zeigt (`/steps/1/then/0` → «2.1», `else` → «2.s1»). */
+export function stepNumberOfPath(path: string): string | null {
+  const re = /\/(steps|then|else)\/(\d+)/g;
+  let n = '';
+  for (let m = re.exec(path); m; m = re.exec(path)) {
+    const i = Number(m[2]) + 1;
+    n = n ? `${n}.${m[1] === 'else' ? 's' : ''}${i}` : String(i);
+  }
+  return n || null;
+}
+
+/** Wo eine Meldung der Prüfung hingehört, in Worten («Auslöser», «Schritt 2.1»). */
+export function placeOfPath(path: string): string {
+  if (path.startsWith('/trigger')) return 'Auslöser';
+  const n = stepNumberOfPath(path);
+  return n ? `Schritt ${n}` : 'Workflow';
+}
+
+/** Art und Titel eines Schritts, z. B. «Aufgabe «Gerät prüfen»»; ohne Titel nur die Art. */
+export function stepTitle(s: Step, meta: WorkflowMetaJson | undefined): string {
+  const kind = STEP_KIND_LABEL[kindOf(s)] ?? 'Schritt';
+  const title = s.label || ('task' in s ? s.task.title : 'approval' in s ? s.approval.title : 'action' in s ? meta?.actions.find(a => a.key === s.action)?.label : '') || '';
+  return title && title !== kind ? `${kind} «${title}»` : kind;
+}
+
 export function summary(s: Step, meta: WorkflowMetaJson | undefined, fields: ContextField[]): string {
   if ('action' in s) return s.action ? (meta?.actions.find(a => a.key === s.action)?.label ?? s.action) : 'Aktion noch nicht gewählt';
   if ('if' in s) return `Wenn ${describeCondition(s.if, fields)}`;
@@ -177,7 +205,11 @@ export function StepList({ steps, onChange, path, number, title }: { steps: Step
             <li key={s.id} data-step-id={s.id}>
               <StepCard step={s} path={`${path}/${i}`} number={`${number}${i + 1}`}
                 onChange={n => onChange(steps.map((x, j) => (j === i ? n : x)))}
-                onRemove={() => { onChange(steps.filter((_, j) => j !== i)); requestAnimationFrame(() => addRef.current?.focus()); }}
+                onRemove={() => {
+                  ed.onRemove?.(`Schritt ${number}${i + 1} (${stepTitle(s, ed.meta)})`);
+                  onChange(steps.filter((_, j) => j !== i));
+                  if (!ed.onRemove) requestAnimationFrame(() => addRef.current?.focus());
+                }}
                 onUp={i > 0 ? () => move(i, -1) : undefined} onDown={i < steps.length - 1 ? () => move(i, 1) : undefined} />
             </li>
           ))}

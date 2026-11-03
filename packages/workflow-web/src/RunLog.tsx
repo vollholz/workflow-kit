@@ -1,17 +1,19 @@
 /**
  * Protokoll (Konzept 4.9 und 10): Läufe mit Zustand, Auslöser, Bezug, Start und Dauer; Filter nach Workflow, Bezug
  * und Zustand; weitere Seiten über den Cursor. Ein Lauf öffnet sich mit seinen Schritten (Ein- und Ausgaben so, wie
- * der Server sie liefert: gekürzt, Geheimnisse geschwärzt), Fehlern und Zeiten.
+ * der Server sie liefert: gekürzt, Geheimnisse geschwärzt, unter «Technische Details»), Fehlern und Zeiten. Workflow und
+ * Schritte stehen mit Namen da (Schritt mit Nummer und Titel aus der Version des Laufs), nie mit ihrer ID.
  *
  * Regel: Vorfall-Aktionen («Nochmals versuchen», «Schritt überspringen», «Abbrechen») nur mit `workflow:operate`;
  * Überspringen und Abbrechen fragen nach.
  */
 import { useId, useState } from 'react';
-import { useIncidentAction, useRun, useRuns, useWorkflows, type IncidentAction, type RunFilter } from './api.ts';
+import { useIncidentAction, useRun, useRuns, useWorkflowDetail, useWorkflows, useWorkflowVersion, type IncidentAction, type RunFilter } from './api.ts';
+import { walk } from './placeholders.tsx';
 import { ActorName, SubjectTitle, useWorkflow } from './provider.tsx';
-import type { RunJson, RunState } from './types.ts';
+import type { AutomationDefinition, RunJson, RunState } from './types.ts';
 import { Badge, fmtDateTime, fmtElapsed, Json, RUN_STATE_LABEL, runTone, STEP_STATE_LABEL, TRIGGER_KIND_LABEL } from './ui.tsx';
-import { STEP_KIND_LABEL } from './steps.tsx';
+import { STEP_KIND_LABEL, stepNumberOfPath, stepTitle } from './steps.tsx';
 
 export interface RunLogProps {
   /** Nur Läufe dieses Workflows (Filter fest). */
@@ -126,6 +128,8 @@ function RunDetail({ runId, name, onBack, onOpenWorkflow }: { runId: string; nam
   const { ui } = w;
   const id = useId();
   const run = useRun(runId);
+  const wf = useWorkflowDetail(run.data?.workflowId);
+  const version = useWorkflowVersion(run.data?.workflowId, run.data?.version);
   const act = useIncidentAction();
   const [confirm, setConfirm] = useState<IncidentAction | null>(null);
   const [done, setDone] = useState<string | null>(null);
@@ -133,24 +137,27 @@ function RunDetail({ runId, name, onBack, onOpenWorkflow }: { runId: string; nam
   if (run.isPending) return <>{back}<ui.Loading label="Lauf wird geladen …" /></>;
   if (run.isError) return <>{back}<ui.ErrorBox error={run.error} onRetry={() => void run.refetch()} /></>;
   const r = run.data;
+  const wfName = name.get(r.workflowId) ?? wf.data?.name ?? 'Workflow';
+  const def = version.data?.definition as AutomationDefinition | undefined;
+  const byId = new Map(def && Array.isArray(def.steps) ? [...walk(def.steps)].map(s => [s.id, s]) : []);
   const operate = w.can('workflow:operate');
   const doIt = (action: IncidentAction) => act.mutate({ runId: r.id, action }, { onSuccess: (x: RunJson) => { setConfirm(null); setDone(`${ACTION_LABEL[action]}: Lauf ist jetzt «${RUN_STATE_LABEL[x.state]}».`); } });
   const actions: IncidentAction[] = r.state === 'incident' ? ['retry', 'skip', 'cancel'] : r.state === 'running' || r.state === 'waiting' ? ['cancel'] : [];
   return (
     <section className="wf-run" aria-labelledby={`${id}-h`}>
       {back}
-      <h2 id={`${id}-h`}>Lauf {name.get(r.workflowId) ? `von «${name.get(r.workflowId)}»` : ''}</h2>
+      <h2 id={`${id}-h`}>{`Lauf von «${wfName}»`}</h2>
       <dl className="wf-summary">
         <dt>Zustand</dt><dd><Badge tone={runTone(r.state)}>{RUN_STATE_LABEL[r.state]}</Badge></dd>
-        <dt>Workflow</dt><dd>{onOpenWorkflow ? <button type="button" className="wf-link" onClick={() => onOpenWorkflow(r.workflowId)}>{name.get(r.workflowId) ?? r.workflowId}</button> : (name.get(r.workflowId) ?? r.workflowId)} · Version {r.version}</dd>
+        <dt>Workflow</dt><dd>{onOpenWorkflow ? <button type="button" className="wf-link" onClick={() => onOpenWorkflow(r.workflowId)}>{wfName}</button> : wfName} · Version {r.version}</dd>
         <dt>Auslöser</dt><dd>{TRIGGER_KIND_LABEL[r.triggerKind] ?? r.triggerKind}{r.trigger.event ? ` · ${r.trigger.event.type}` : ''}{r.trigger.manual ? <>{' · von '}<ActorName actor={r.trigger.manual.by} /></> : null}</dd>
         <dt>Bezug</dt><dd><SubjectLink subject={r.subject} /></dd>
-        <dt>Akteur</dt><dd><ActorName actor={r.actor} /></dd>
+        <dt>Handelt als</dt><dd><ActorName actor={r.actor} /></dd>
         <dt>Start</dt><dd>{fmtDateTime(r.startedAt)}{r.finishedAt ? ` · Ende ${fmtDateTime(r.finishedAt)} (${fmtElapsed(r.startedAt, r.finishedAt)})` : ''}</dd>
         {r.wakeAt ? <><dt>Wartet bis</dt><dd>{fmtDateTime(r.wakeAt)}</dd></> : null}
         {r.chainDepth > 1 ? <><dt>Kettentiefe</dt><dd>{r.chainDepth}</dd></> : null}
       </dl>
-      {r.error ? <div className="wf-error" role="alert"><div><b>{r.state === 'incident' ? 'Vorfall' : 'Fehler'}</b><div>{r.error.message}</div>{r.error.path ? <div className="wf-small wf-muted">bei {r.error.path}</div> : null}</div></div> : null}
+      {r.error ? <div className="wf-error" role="alert"><div><b>{r.state === 'incident' ? 'Vorfall' : 'Fehler'}</b><div>{r.error.message}</div>{r.error.path ? <div className="wf-small wf-muted">bei Schritt {stepNumberOfPath(r.error.path) ?? r.error.path}</div> : null}</div></div> : null}
       {actions.length ? (
         operate ? (
           <div className="wf-row" role="group" aria-label="Vorfall lösen">
@@ -167,16 +174,15 @@ function RunDetail({ runId, name, onBack, onOpenWorkflow }: { runId: string; nam
           {r.steps.map(s => (
             <li key={s.id} className={s.error ? 'bad' : ''}>
               <div className="wf-row">
-                <b>{s.stepId}</b>
-                <span className="wf-muted">{STEP_KIND_LABEL[s.kind] ?? s.kind}</span>
+                <b>{`Schritt ${stepNumberOfPath(s.path) ?? '?'}`}</b>
+                <span>{byId.get(s.stepId) ? stepTitle(byId.get(s.stepId)!, undefined) : (STEP_KIND_LABEL[s.kind] ?? s.kind)}</span>
                 <Badge tone={s.error ? 'bad' : s.state === 'completed' ? 'ok' : 'muted'}>{STEP_STATE_LABEL[s.state] ?? s.state}</Badge>
                 {s.attempt > 1 ? <span className="wf-small">Versuch {s.attempt}</span> : null}
                 <span className="wf-small wf-muted">{fmtDateTime(s.startedAt)} {fmtElapsed(s.startedAt, s.finishedAt)}</span>
               </div>
               {s.error ? <div className="wf-bad">{s.error.message}</div> : null}
               {s.log.length ? <ul className="wf-log">{s.log.map((l, i) => <li key={i}>{l}</li>)}</ul> : null}
-              <Json value={s.input} label="Eingabe" />
-              <Json value={s.output} label="Ausgabe" />
+              {s.input !== undefined || s.output !== undefined ? <Json value={{ eingabe: s.input, ausgabe: s.output }} label="Technische Details" /> : null}
             </li>
           ))}
         </ol>

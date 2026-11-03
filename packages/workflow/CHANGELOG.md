@@ -10,6 +10,25 @@ folgen die Angaben für die Entwickler der App.
 
 ## [Unveröffentlicht]
 
+## [0.4.0] – 2026-11-03
+
+### Für Nutzer
+
+- Ein pausierter Workflow lässt sich fortsetzen: Er läuft mit derselben Version und im Namen desselben Akteurs weiter,
+  ohne dass eine neue Version entsteht.
+
+### Für den Betrieb
+
+- (keine)
+
+### Hinzugefügt
+
+- Route `POST /workflows/:id/resume` (Recht `workflow:activate`): nur aus `paused` mit aktiver Version; prüft, ob der
+  Akteur noch aktiv ist (sonst 422) und die Grenze der aktiven Workflows (409 `limit`); baut die Auslöser der aktiven
+  Version neu auf. Meldet `workflow.activated` mit `resumed: true` und schreibt `workflow.resumed` ins Audit.
+- `TeamOption.group?: string` (Port `teams`): Überschrift der Gruppe in der Auswahl der Oberfläche, z. B. «Rollen»;
+  `GET /queues/teams` gibt sie weiter.
+
 ## [0.3.0] – 2026-11-03
 
 ### Für Nutzer

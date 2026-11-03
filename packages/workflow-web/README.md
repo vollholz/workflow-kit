@@ -58,7 +58,7 @@ der Provider einen eigenen an (oder nimmt `queryClient`).
 | Baustein | Inhalt |
 |---|---|
 | `WorkflowList` | Name, Art, Bereich, Zustand, letzte Läufe (ok/Fehler), Akteur; Filter; «Neu» legt einen Entwurf an (`workflow:manage`); Hinweis, wenn das Modul nicht verfügbar ist |
-| `StepListEditor` | Kopf (Name, Zustand, Entwurf ↔ aktive Version, Speichern mit `If-Match` und Konfliktdialog, «Aktivieren …» mit Zusammenfassung und Akteur, Pausieren, Archivieren, Löschen eines Entwurfs); Auslöser (Ereignis mit Filter in Klartext, Zeitplan mit Beschreibung, von Hand mit Formular); Schritte als Karten (Aktion mit Formular aus dem Eingabe-Schema, Wenn/Sonst, Für jedes, Warten, Werte setzen, Beenden), verschachtelt, mit Knöpfen verschieben; Platzhalter-Auswahl mit Bezeichnungen; Meldungen der Prüfung am Schritt; Probelauf mit Bezug oder Ereignis |
+| `StepListEditor` | Kopf (Name, Satz zu Auslöser, Bereich und Akteur; «Name und Beschreibung …»; ohne Titel mit `showTitle={false}`); Statusleiste mit einer Hauptaktion je Zustand («Aktivieren …», «Version n aktivieren …», «Fortsetzen»; daneben Verwerfen, Pausieren, Archivieren, Löschen); Entwurf speichert sich selbst (`saveDelayMs`, `If-Match`, Konfliktdialog, Nachfrage beim Verlassen); Entfernen mit Rückgängig; Auslöser (Ereignis mit Filter in Klartext, Zeitplan mit Beschreibung, von Hand mit Formular); Schritte als Karten (Aktion mit Formular aus dem Eingabe-Schema, Wenn/Sonst, Für jedes, Warten, Werte setzen, Beenden), verschachtelt, mit Knöpfen verschieben; Platzhalter-Auswahl mit Bezeichnungen; Meldungen der Prüfung am Schritt; Probelauf mit Bezug oder Ereignis |
 | `RunLog` | Läufe mit Filter (Workflow, Bezug, Zustand) und «Weitere laden»; Lauf mit Schritten, Ein-/Ausgaben, Fehlern, Zeiten; «Nochmals versuchen», «Schritt überspringen», «Lauf abbrechen» (`workflow:operate`) |
 | `SettingsPanel`, `StatusBanner` | Opt-in des Mandanten und Grenzen (`workflow:admin`), Zähler des Tages; Hinweis, wenn das Modul aus ist |
 | `SubjectWorkflowBar` | Knöpfe der aktiven Workflows mit manuellem Auslöser (mit Formular), offene Aufgaben (`onOpenTask`) und letzte Läufe am Bezug; `filter(workflow)` grenzt die Knöpfe ein; nach einem Start lädt sie nach, solange der Lauf läuft (alle 2 s, höchstens 30 s) |
@@ -69,7 +69,7 @@ der Provider einen eigenen an (oder nimmt `queryClient`).
 
 Daten-Hooks für eigene Ansichten: `useWorkflowStatus`, `useWorkflowMeta`, `useWorkflowSettings`,
 `useSaveWorkflowSettings`, `useWorkflows`, `useWorkflowDetail`, `useCreateWorkflow`, `useSaveWorkflow`,
-`useDeleteWorkflow`, `useValidateDefinition`, `useWorkflowLifecycle` (`activate`, `pause`, `archive`),
+`useDeleteWorkflow`, `useValidateDefinition`, `useWorkflowLifecycle` (`activate`, `pause`, `resume`, `archive`),
 `useWorkflowVersions`, `useWorkflowVersion`, `useStartRun`, `useDryRun`, `useRuns` (Cursor), `useRun`,
 `useIncidentAction`; Stufe 2: `useTasks`, `useTask`, `useTaskAction`, `useBulkTasks`, `useTaskCounts` (Zähler für
 die Navigation der App: `{ mine: { open, overdue }, team: { open, overdue, unassigned } }`, fragt erst bei verfügbarem

@@ -159,19 +159,17 @@ it('Editor: Schritt «Aufgabe» mit Zuständiger Warteschlange, Formularfeld und
     'GET /v1/queues': () => json({ items: [{ id: Q1, name: 'Verkauf', team: { type: 'role', id: 'sales' }, sort: 'urgency', assignment: 'pull', calendarId: null, slaTarget: null, escalation: null, revision: 1, createdAt: '', updatedAt: '' }] }),
     [`PUT /v1/workflows/${WF}`]: async req => json({ ...d, revision: 2, definition: ((await req.json()) as { definition: unknown }).definition }),
   });
-  renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} />);
+  renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} saveDelayMs={0} />);
   await userEvent.click(await screen.findByRole('button', { name: 'Schritt hinzufügen' }));
   await userEvent.click(screen.getByRole('button', { name: 'Aufgabe' }));
   const card = screen.getByRole('region', { name: /Schritt 1: Aufgabe/ });
   await userEvent.type(within(card).getByLabelText(/^Titel/), 'Prüfen');
-  await userEvent.selectOptions(within(card).getByLabelText('Zuständig'), 'queue');
-  await userEvent.selectOptions(await within(card).findByLabelText('Zuständig: Warteschlange'), 'Verkauf');
+  await userEvent.click(within(card).getByRole('combobox', { name: 'Zuständig: suchen' }));
+  await userEvent.click(await within(card).findByRole('option', { name: 'Verkauf' }));
   await userEvent.click(within(card).getByRole('button', { name: 'Feld hinzufügen' }));
   await userEvent.type(within(card).getByLabelText('Schritt 1: Feld 1 Bezeichnung'), 'Notiz');
   await userEvent.selectOptions(within(card).getByLabelText('Frist'), 'yes');
   await userEvent.selectOptions(within(card).getByLabelText('Schritt 1: Frist: Zeitraum'), 'BH');
-  await userEvent.click(screen.getByRole('button', { name: 'Speichern' }));
-  await waitFor(() => expect(calls.some(c => c.method === 'PUT')).toBe(true));
-  const steps = (calls.find(c => c.method === 'PUT')!.body as { definition: { steps: unknown[] } }).definition.steps;
-  expect(steps).toEqual([{ id: 's1', task: { title: 'Prüfen', assignee: { queue: Q1 }, form: [{ key: 'feld1', label: 'Notiz', type: 'text' }], due: 'PT1BH' } }]);
+  await waitFor(() => expect((calls.filter(c => c.method === 'PUT').at(-1)?.body as { definition: { steps: unknown[] } } | undefined)?.definition.steps)
+    .toEqual([{ id: 's1', task: { title: 'Prüfen', assignee: { queue: Q1 }, form: [{ key: 'feld1', label: 'Notiz', type: 'text' }], due: 'PT1BH' } }]));
 });
