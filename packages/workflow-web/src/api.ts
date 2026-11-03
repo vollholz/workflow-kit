@@ -241,6 +241,8 @@ export interface DryRunBody {
   subject?: WorkflowSubjectRef;
   input?: Record<string, unknown>;
   event?: { type: string; subject?: WorkflowSubjectRef | null; data?: Record<string, unknown> };
+  /** Angenommenes Ergebnis je Schritt-ID (Aufgabe, Genehmigung). */
+  assume?: Record<string, string>;
 }
 
 /** Probelauf (schreibt nichts). */

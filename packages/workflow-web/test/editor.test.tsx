@@ -1,11 +1,11 @@
 /**
  * Editor: Ablauf wächst Schritt für Schritt (leer nur «Ersten Schritt hinzufügen», Auslöser im Sheet), Einfügen an jeder
- * Stelle über das Sheet (Gruppen, Zurück, Suche), Wege, Tastatur, Aktion aus dem Schema, Platzhalter, Prüfung am
- * Schritt, Entwurf speichert sich selbst, Konflikt beim Speichern, Werkzeugleiste (Zustand, Hauptaktion, Menü «Weitere
- * Aktionen»), Entfernen mit Rückgängig, Zeitplan als Auswahl, Probelauf mit Schrittnamen; dazu die reinen Hilfen für
- * Pfade und Zeitpläne.
+ * Stelle über das Sheet (Gruppen, Zurück, Suche), Wege, Tastatur, Aktion aus dem Schema, Daten als Chips, Fehler und
+ * Hinweise am Schritt, Entwurf speichert sich selbst, Konflikt beim Speichern, Werkzeugleiste (Zustand, Hauptaktion, Menü
+ * «Weitere Aktionen»), Entfernen mit Rückgängig, Zeitplan als Auswahl; Etappe 3: Wege nach Ergebnis, Ergebnisse als
+ * Liste, Probelauf im Ablauf mit Annahmen, Änderungen ansehen; dazu die reinen Hilfen für Pfade und Zeitpläne.
  */
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { listAt, numberOf, splitPath, stepAt, withList } from '../src/flow.tsx';
@@ -52,6 +52,21 @@ describe('Pfade im Ablauf', () => {
     { id: 'a', end: { result: 'completed' } },
     { id: 'b', if: { field: 'x', op: 'isSet' }, then: [{ id: 'c', set: { v: 1 } }] },
   ];
+  it('Wege nach Ergebnis: lesen, ändern, nummerieren; ein leerer Weg fällt weg', () => {
+    const ways: Step[] = [
+      { id: 'g', approval: { title: 'Freigabe', approvers: [{ actor: { id: 'bea', kind: 'person' } }], mode: 'first' }, branches: { rejected: [{ id: 'r', end: { result: 'cancelled' } }] } },
+    ];
+    expect(stepAt(ways, '/steps/0/branches/rejected/0')?.id).toBe('r');
+    expect(listAt(ways, '/steps/0/branches/approved')).toEqual([]);
+    expect(numberOf('/steps/0/branches/rejected/0', ways)).toBe('1.b1');
+    expect(numberOf('/steps/0/branches/approved/0', ways)).toBe('1.1');
+    const added = withList(ways, '/steps/0/branches/approved', l => [...l, { id: 'a', set: { ok: true } }]);
+    expect((added[0] as { branches: Record<string, Step[]> }).branches.approved!.map(x => x.id)).toEqual(['a']);
+    const cleared = withList(added, '/steps/0/branches/rejected', () => []);
+    expect((cleared[0] as { branches: Record<string, Step[]> }).branches).toEqual({ approved: [{ id: 'a', set: { ok: true } }] });
+    expect(withList(cleared, '/steps/0/branches/approved', () => [])[0]).not.toHaveProperty('branches');
+  });
+
   it('lesen, ändern, nummerieren; ein leeres «Sonst» fällt weg', () => {
     expect(splitPath('/steps/1/then/0')).toEqual({ list: '/steps/1/then', index: 0 });
     expect(stepAt(steps, '/steps/1/then/0')?.id).toBe('c');
@@ -133,10 +148,16 @@ describe('StepListEditor', () => {
     expect(within(card).getByLabelText(/^Grund/)).toBeRequired();
     await userEvent.type(within(card).getByLabelText(/^Grund/), 'Zahlung fehlt');
     await userEvent.click(within(card).getByLabelText('Kundschaft benachrichtigen'));
-    await userEvent.click(within(card).getByRole('button', { name: 'Platzhalter einfügen in «Bestellung»' }));
-    const ph = screen.getByRole('dialog', { name: 'Platzhalter wählen' });
-    await userEvent.click(within(within(ph).getByRole('group', { name: 'Bezug: Bestellung' })).getByRole('button', { name: /^ID/ }));
-    expect(within(card).getByLabelText(/^Bestellung/)).toHaveValue('{{subject.id}}');
+    const order = within(card).getByRole('textbox', { name: /^Bestellung/ });
+    await userEvent.click(order);
+    await userEvent.keyboard('{{');
+    const ph = screen.getByRole('dialog', { name: 'Daten wählen' });
+    expect(within(ph).getByRole('textbox', { name: 'Daten suchen' })).toHaveFocus();
+    expect(ph).not.toHaveTextContent('subject.id');
+    await userEvent.click(within(within(ph).getByRole('group', { name: 'Bezug: Bestellung' })).getByRole('button', { name: 'ID' }));
+    expect(screen.queryByRole('dialog', { name: 'Daten wählen' })).toBeNull();
+    expect(order).toHaveTextContent('Bestellung · ID');
+    expect(order).not.toHaveTextContent('{{');
     await waitFor(() => expect(lastSteps(calls)).toEqual([
       { id: 's1', action: 'order.cancel', input: { order: '{{subject.id}}', reason: 'Zahlung fehlt', notify: true } },
     ]));
@@ -209,7 +230,7 @@ describe('StepListEditor', () => {
     await waitFor(() => expect(lastSteps(calls)).toEqual([{ id: 's1', end: { result: 'completed' } }]));
   });
 
-  it('Hinweise: Zähler an der Karte und in der Leiste; Klick springt zur ersten Stelle', async () => {
+  it('Fehler und Hinweise: Zähler an der Karte und in der Leiste; Klick springt zur ersten Stelle', async () => {
     const { calls } = routes(detail({}, { steps: [{ id: 's1', action: 'order.cancel', input: {} }, { id: 's2', if: { field: 'steps.x.state', op: 'eq', value: 'a' }, then: [{ id: 's3', end: { result: 'completed' } }] }] }), {
       'POST /v1/workflows/validate': () => json({
         ok: false,
@@ -220,16 +241,18 @@ describe('StepListEditor', () => {
           { path: '/trigger/event', message: 'Unbekannter Ereignistyp «order.updated»' },
         ],
         stage: [],
+        warnings: [{ path: '/steps/1/then/1', message: 'Wird nie ausgeführt: Der Schritt davor beendet den Lauf' }],
       }),
     });
     renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} />);
     const pane = await screen.findByRole('complementary', { name: 'Detail' });
-    expect(await within(pane).findByRole('list', { name: 'Hinweise zum Auslöser' })).toHaveTextContent('Unbekannter Ereignistyp');
-    await waitFor(() => expect(row(/^Schritt 1: Aktion/)).toHaveTextContent('1 Hinweis'));
-    expect(row(/^Schritt 2\.1: Beenden/)).toHaveTextContent('1 Hinweis');
-    await userEvent.click(within(bar()).getByRole('button', { name: '4 Hinweise' }));
+    expect(await within(pane).findByRole('list', { name: 'Fehler am Auslöser' })).toHaveTextContent('Unbekannter Ereignistyp');
+    await waitFor(() => expect(row(/^Schritt 1: Aktion/)).toHaveTextContent('1 Fehler'));
+    expect(row(/^Schritt 2\.1: Beenden/)).toHaveTextContent('1 Fehler');
+    expect(within(bar()).getByRole('button', { name: '1 Hinweis' })).toBeInTheDocument();
+    await userEvent.click(within(bar()).getByRole('button', { name: '4 Fehler' }));
     expect(row(/^Schritt 2: Wenn/)).toHaveAttribute('aria-current', 'true');
-    const second = within(detailPane()).getByRole('list', { name: 'Hinweise zu Schritt 2' });
+    const second = within(detailPane()).getByRole('list', { name: 'Fehler in Schritt 2' });
     expect(second).toHaveTextContent('Verweis auf unbekannten Schritt «x»');
     expect(second).not.toHaveTextContent('Erlaubt');
     expect(calls.find(c => c.path === '/v1/workflows/validate')!.body).toMatchObject({ definition: { kind: 'automation' } });
@@ -373,7 +396,7 @@ describe('StepListEditor', () => {
       'POST /v1/workflows/validate': () => json({ ok: false, errors: [{ path: '/steps/0/action', message: 'Ungültige Schreibweise' }], stage: [] }),
     });
     renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} />);
-    await waitFor(() => expect(row(/^Schritt 1: Aktion/)).toHaveTextContent('1 Hinweis'));
+    await waitFor(() => expect(row(/^Schritt 1: Aktion/)).toHaveTextContent('1 Fehler'));
     await userEvent.click(within(bar()).getByRole('button', { name: 'Aktivieren …' }));
     const dialog = screen.getByRole('dialog', { name: 'Workflow aktivieren' });
     expect(within(dialog).getByText('Die Prüfung meldet noch 1 offene Stelle.')).toBeInTheDocument();
@@ -384,7 +407,7 @@ describe('StepListEditor', () => {
     expect(calls.some(c => c.path.endsWith('/activate'))).toBe(false);
   });
 
-  it('Probelauf im Modus «Probelauf»: gesuchter Bezug, Ergebnis je Schritt mit Nummer und Titel', async () => {
+  it('Probelauf im Ablauf: gesuchter Bezug, Ergebnis an der Karte, Einzelheiten zum gewählten Schritt', async () => {
     const { calls } = routes(detail({}, { steps: [{ id: 's1', action: 'order.cancel', input: { order: '{{subject.id}}', reason: 'x' } }] }), {
       [`POST /v1/workflows/${WF}/dry-run`]: () => json({
         triggerMatches: null, result: 'completed', variables: {},
@@ -398,13 +421,169 @@ describe('StepListEditor', () => {
     await userEvent.click(within(pane).getByRole('button', { name: 'Suchen' }));
     await userEvent.click(await within(pane).findByRole('button', { name: 'Bestellung o1 o1' }));
     expect(within(pane).queryByRole('list', { name: 'Treffer' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Schritt einfügen/ })).toBeNull();
     await userEvent.click(within(pane).getByRole('button', { name: 'Probelauf starten' }));
     const result = await within(pane).findByRole('region', { name: 'Ergebnis des Probelaufs' });
-    expect(result).toHaveTextContent('Schritt 1 · Aktion «Bestellung stornieren»: würde Bestellung o1 stornieren');
-    expect(result).toHaveTextContent('Dem Akteur fehlen Rechte: order:write');
-    expect(calls.find(c => c.path.endsWith('/dry-run'))!.body).toMatchObject({ subject: { type: 'order', id: 'o1' }, definition: { kind: 'automation' } });
+    expect(result).toHaveTextContent('Ergebnis: würde erfolgreich enden · 1 Schritt durchlaufen');
+    expect(row(/^Schritt 1: Aktion «Bestellung stornieren», im Probelauf würde scheitern$/)).toHaveTextContent('Dem Akteur fehlen Rechte: order:write');
+    expect(calls.find(c => c.path.endsWith('/dry-run'))!.body).toMatchObject({ subject: { type: 'order', id: 'o1' }, definition: { kind: 'automation' }, assume: {} });
     await userEvent.click(row(/^Schritt 1: Aktion/));
+    expect(screen.getByRole('complementary', { name: 'Probelauf' })).toBeInTheDocument();
+    expect(result).toHaveTextContent('Schritt 1 · Aktion «Bestellung stornieren»würde Bestellung o1 stornieren');
+    expect(within(result).getByText('Technische Details')).toBeInTheDocument();
+    await userEvent.click(within(bar()).getByRole('button', { name: 'Bearbeiten' }));
     expect(screen.getByRole('complementary', { name: 'Detail' })).toBeInTheDocument();
+  });
+
+  it('Wege nach Ergebnis: Genehmigung mit Weg je Ergebnis, Hinweis am leeren Weg, Einfügen hebt die Fassung auf 2', async () => {
+    const def: Partial<AutomationDefinition> = {
+      trigger: { manual: {} },
+      steps: [{ id: 'g', approval: { title: 'Freigabe', approvers: [{ actor: { id: 'bea', kind: 'person' } }], mode: 'first' } }],
+    };
+    const { calls } = routes(detail({}, def), {
+      [`PUT /v1/workflows/${WF}`]: async req => json({ ...detail({ revision: 2 }), definition: ((await req.json()) as { definition: unknown }).definition }),
+      'POST /v1/workflows/validate': async req => {
+        const d = ((await req.json()) as { definition: AutomationDefinition }).definition;
+        const ways = (d.steps[0] as { branches?: Record<string, unknown[]> }).branches ?? {};
+        const warnings = ['approved', 'rejected'].filter(o => !ways[o]?.length).map(o => ({ path: `/steps/0/branches/${o}`, message: `Nach «${o === 'approved' ? 'Genehmigt' : 'Abgelehnt'}» geschieht nichts` }));
+        return json({ ok: true, errors: [], stage: [], warnings });
+      },
+    });
+    renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} saveDelayMs={0} />);
+    await screen.findByRole('button', { name: 'Auslöser' });
+    await waitFor(() => expect(within(bar()).getByRole('button', { name: '2 Hinweise' })).toBeInTheDocument());
+    expect(row(/^Schritt 1: Genehmigung «Freigabe», 2 Hinweise$/)).toHaveTextContent('2 Hinweise');
+    expect(screen.getAllByText('Hier geschieht nichts')).toHaveLength(2);
+    await userEvent.click(screen.getByRole('button', { name: 'Schritt einfügen am Anfang von «Abgelehnt» in Schritt 1' }));
+    expect(screen.getByRole('dialog', { name: 'Schritt hinzufügen' })).toHaveTextContent('Am Anfang von «Abgelehnt» in Schritt 1');
+    await pick('Ablauf steuern', /^Beenden/);
+    expect(row(/^Schritt 1\.b1: Beenden/)).toHaveAttribute('aria-current', 'true');
+    await waitFor(() => expect(lastDef(calls)).toMatchObject({ schemaVersion: 2, steps: [{ id: 'g', branches: { rejected: [{ id: 's2', end: { result: 'completed' } }] } }] }));
+    await waitFor(() => expect(screen.getAllByText('Hier geschieht nichts')).toHaveLength(1));
+    await userEvent.click(within(bar()).getByRole('button', { name: '1 Hinweis' }));
+    expect(row(/^Schritt 1: Genehmigung/)).toHaveAttribute('aria-current', 'true');
+    expect(within(detailPane()).getByRole('list', { name: 'Hinweise zu Schritt 1' })).toHaveTextContent('Nach «Genehmigt» geschieht nichts');
+  });
+
+  it('Ergebnisse einer Aufgabe als Liste: zweites Ergebnis erzeugt Wege, Umbenennen nimmt den Weg mit', async () => {
+    const def: Partial<AutomationDefinition> = {
+      trigger: { manual: {} },
+      steps: [{ id: 't', task: { title: 'Prüfen', assignee: { actor: { id: 'bea', kind: 'person' } } } }],
+    };
+    const { calls } = routes(detail({}, def), {
+      [`PUT /v1/workflows/${WF}`]: async req => json({ ...detail({ revision: 2 }), definition: ((await req.json()) as { definition: unknown }).definition }),
+    });
+    renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} saveDelayMs={0} />);
+    await userEvent.click(await screen.findByRole('button', { name: /^Schritt 1: Aufgabe/ }));
+    const outcomes = within(detailPane()).getByRole('group', { name: 'Ergebnisse' });
+    expect(within(outcomes).getByRole('textbox', { name: 'Ergebnis 1' })).toHaveValue('Erledigt');
+    expect(screen.queryByText('Erledigt', { selector: '.wf-lane-label' })).toBeNull();
+    await userEvent.click(within(outcomes).getByRole('button', { name: 'Ergebnis hinzufügen' }));
+    expect(within(outcomes).getByRole('textbox', { name: 'Ergebnis 2' })).toHaveValue('Ergebnis 2');
+    expect(screen.getByText('Erledigt', { selector: '.wf-lane-label' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Schritt einfügen am Anfang von «Ergebnis 2» in Schritt 1' }));
+    await pick('Ablauf steuern', /^Beenden/);
+    await userEvent.click(row(/^Schritt 1: Aufgabe/));
+    const name = within(within(detailPane()).getByRole('group', { name: 'Ergebnisse' })).getByRole('textbox', { name: 'Ergebnis 2' });
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Nachbessern');
+    await waitFor(() => expect(lastSteps(calls)).toEqual([{
+      id: 't', task: { title: 'Prüfen', assignee: { actor: { id: 'bea', kind: 'person' } }, outcomes: ['done', 'Nachbessern'] },
+      branches: { Nachbessern: [{ id: 's2', end: { result: 'completed' } }] },
+    }]));
+    expect(within(within(detailPane()).getByRole('group', { name: 'Ergebnisse' })).getByRole('button', { name: /«Nachbessern» entfernen/ })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByText('Nachbessern', { selector: '.wf-lane-label' })).toBeInTheDocument();
+  });
+
+  it('Probelauf mit Annahme: Ergebnis an der Karte wählen, der Probelauf folgt dem Weg, der andere ist blass', async () => {
+    const def: Partial<AutomationDefinition> = {
+      schemaVersion: 2, trigger: { manual: {} },
+      steps: [{
+        id: 'g', approval: { title: 'Freigabe', approvers: [{ actor: { id: 'bea', kind: 'person' } }], mode: 'first' },
+        branches: { approved: [{ id: 'y', set: { ok: true } }], rejected: [{ id: 'n', end: { result: 'cancelled' } }] },
+      }],
+    };
+    const { calls } = routes(detail({}, def), {
+      [`POST /v1/workflows/${WF}/dry-run`]: async req => {
+        const b = (await req.json()) as { assume?: Record<string, string> };
+        const outcome = b.assume?.g ?? 'approved';
+        const first = { path: '/steps/0', stepId: 'g', kind: 'approval', label: null, summary: `würde die Genehmigung «Freigabe» anlegen und warten (angenommen: «${outcome === 'approved' ? 'Genehmigt' : 'Abgelehnt'}»)`, outcomes: ['approved', 'rejected'], outcome };
+        const next = outcome === 'approved'
+          ? { path: '/steps/0/branches/approved/0', stepId: 'y', kind: 'set', label: null, summary: 'setzt ok' }
+          : { path: '/steps/0/branches/rejected/0', stepId: 'n', kind: 'end', label: null, summary: 'beendet den Lauf (cancelled)' };
+        return json({ triggerMatches: null, result: outcome === 'approved' ? 'completed' : 'cancelled', variables: {}, steps: [first, next] });
+      },
+    });
+    renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Probelauf' }));
+    await userEvent.click(within(screen.getByRole('complementary', { name: 'Probelauf' })).getByRole('button', { name: 'Probelauf starten' }));
+    const choice = await screen.findByRole('group', { name: 'Angenommenes Ergebnis von Schritt 1' });
+    expect(within(choice).getByRole('button', { name: 'Genehmigt' })).toHaveAttribute('aria-pressed', 'true');
+    expect(row(/^Schritt 1\.1: Werte setzen, im Probelauf durchlaufen$/)).toBeInTheDocument();
+    expect(row(/^Schritt 1\.b1: Beenden, im Probelauf wird nicht erreicht$/)).toHaveTextContent('Wird nicht erreicht');
+    await userEvent.click(within(choice).getByRole('button', { name: 'Abgelehnt' }));
+    await waitFor(() => expect(row(/^Schritt 1\.b1: Beenden, im Probelauf durchlaufen$/)).toHaveTextContent('beendet den Lauf'));
+    expect(within(screen.getByRole('group', { name: 'Angenommenes Ergebnis von Schritt 1' })).getByRole('button', { name: 'Abgelehnt' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Genehmigt', { selector: '.wf-lane-label' }).closest('.wf-lane')).toHaveClass('skip');
+    expect(calls.filter(c => c.path.endsWith('/dry-run')).at(-1)!.body).toMatchObject({ assume: { g: 'rejected' } });
+    expect(within(screen.getByRole('region', { name: 'Ergebnis des Probelaufs' })).getByText(/Angenommen: Schritt 1 «Abgelehnt»/)).toBeInTheDocument();
+  });
+
+  it('Änderungen ansehen und Aktivieren mit Änderungen und Stand des Probelaufs', async () => {
+    const v1: AutomationDefinition = { schemaVersion: 1, kind: 'automation', trigger: { manual: {} }, steps: [{ id: 's1', set: { a: '1' } }, { id: 's2', end: { result: 'completed' } }] };
+    const draft: AutomationDefinition = { ...v1, steps: [{ id: 's1', set: { a: '2' } }, { id: 's3', set: { b: '1' } }] };
+    routes(detail({ state: 'active', activeVersion: 1, actor: { id: 'anna', kind: 'person' } }, draft), {
+      [`GET /v1/workflows/${WF}/versions/1`]: () => json({ version: 1, checksum: 'x', actor: { id: 'anna', kind: 'person' }, activatedBy: { id: 'anna', kind: 'person' }, activatedAt: '2026-11-01T08:00:00.000Z', definition: v1 }),
+    });
+    renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} />);
+    await screen.findByRole('button', { name: 'Auslöser' });
+    await userEvent.click(await within(bar()).findByRole('button', { name: 'Änderungen noch nicht aktiv' }));
+    const dlg = screen.getByRole('dialog', { name: 'Änderungen gegenüber Version 1' });
+    expect(within(dlg).getAllByRole('listitem').map(li => li.textContent)).toEqual([
+      'Geändert Schritt 1 · Werte setzen', 'Neu Schritt 2 · Werte setzen', 'Entfernt Beenden (bisher Schritt 2)',
+    ]);
+    await userEvent.click(within(dlg).getByRole('button', { name: 'Schliessen' }));
+    await userEvent.click(within(bar()).getByRole('button', { name: 'Version 2 aktivieren …' }));
+    const act = screen.getByRole('dialog', { name: 'Version 2 aktivieren' });
+    expect(within(act).getByRole('list', { name: 'Änderungen' })).toHaveTextContent('Neu Schritt 2 · Werte setzen');
+    expect(act).toHaveTextContent('Noch kein Probelauf mit diesem Entwurf.');
+    await userEvent.click(within(act).getByRole('button', { name: 'Zum Probelauf' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('complementary', { name: 'Probelauf' })).toBeInTheDocument();
+  });
+
+  it('Daten an einer Stelle: nur Auslöser und frühere Schritte; vorhandene Daten erscheinen als Chip', async () => {
+    const def: Partial<AutomationDefinition> = {
+      trigger: { manual: {} },
+      steps: [
+        { id: 's1', task: { title: 'Prüfen {{subject.title}}', assignee: { actor: { id: 'bea', kind: 'person' } }, form: [{ key: 'note', label: 'Notiz', type: 'text' }] } },
+        { id: 's2', end: { result: 'completed', message: '{{steps.s1.values.note}}' } },
+      ],
+    };
+    routes(detail({}, def));
+    renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} />);
+    await userEvent.click(await screen.findByRole('button', { name: /^Schritt 1: Aufgabe/ }));
+    const title = within(detailPane()).getByRole('textbox', { name: /^Titel/ });
+    expect(title).toHaveTextContent('Prüfen Bestellung · Bezeichnung');
+    expect(within(detailPane()).getByRole('heading', { level: 3 })).toHaveTextContent('Prüfen «Bestellung · Bezeichnung»');
+    expect(row(/^Schritt 1: Aufgabe «Prüfen …»/)).toHaveTextContent('Prüfen «Bestellung · Bezeichnung»');
+    await userEvent.click(within(detailPane()).getByRole('button', { name: 'Daten einfügen in «Titel»' }));
+    expect(within(screen.getByRole('dialog', { name: 'Daten wählen' })).queryByRole('group', { name: /^Schritt 1/ })).toBeNull();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Daten wählen' })).toBeNull();
+    // «{» ohne Tastendruck (Bildschirmtastatur): beforeinput öffnet die Auswahl, das Zeichen bleibt draussen
+    const typed = new InputEvent('beforeinput', { inputType: 'insertText', data: '{', bubbles: true, cancelable: true });
+    fireEvent(title, typed);
+    expect(typed.defaultPrevented).toBe(true);
+    expect(screen.getByRole('dialog', { name: 'Daten wählen' })).toBeInTheDocument();
+    await userEvent.keyboard('{Escape}');
+    await userEvent.click(row(/^Schritt 2: Beenden/));
+    const msg = within(detailPane()).getByRole('textbox', { name: /^Meldung/ });
+    expect(msg).toHaveTextContent('Schritt 1 · Notiz');
+    await userEvent.click(within(detailPane()).getByRole('button', { name: 'Daten einfügen in «Meldung (optional)»' }));
+    const picker = screen.getByRole('dialog', { name: 'Daten wählen' });
+    const step1 = within(picker).getByRole('group', { name: 'Schritt 1 · Aufgabe «Prüfen …»' });
+    expect(within(step1).getAllByRole('button').map(b => b.textContent)).toEqual(['Ergebnis', 'Notiz', 'Erledigt von']);
   });
 
   it('ohne workflow:manage nur lesbar: Karten öffnen, keine Stellen zum Einfügen, kein Speicherstand', async () => {

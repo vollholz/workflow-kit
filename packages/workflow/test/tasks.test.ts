@@ -146,8 +146,8 @@ describe('Aufgaben und Warteschlangen in der App «shop» (PostgreSQL)', { skip 
     return (await admin.query(`INSERT INTO shop.orders (tenant_id, customer, total, secret, owner) VALUES ($1, $2, 100, $3, $4) RETURNING id`,
       [tenant, customer, o.secret ?? false, o.owner ?? null])).rows[0].id;
   }
-  async function activeWorkflow(who: string, name: string, steps: unknown[]): Promise<string> {
-    const created = ok(await call(who, 'POST', '/v1/workflows', { name, scope: { type: 'shop', id: 'main' }, definition: { schemaVersion: 1, kind: 'automation', trigger: { manual: {} }, steps } }), 201);
+  async function activeWorkflow(who: string, name: string, steps: unknown[], schemaVersion = 1): Promise<string> {
+    const created = ok(await call(who, 'POST', '/v1/workflows', { name, scope: { type: 'shop', id: 'main' }, definition: { schemaVersion, kind: 'automation', trigger: { manual: {} }, steps } }), 201);
     ok(await call(who, 'POST', `/v1/workflows/${created.id}/activate`, {}));
     return created.id as string;
   }
@@ -329,6 +329,43 @@ describe('Aufgaben und Warteschlangen in der App «shop» (PostgreSQL)', { skip 
     assert.deepEqual([run.state, run.variables], ['completed', { result: 'rejected', why: 'Budget fehlt' }]);
     assert.equal(run.outputs.ok.votes[0].actor.id, 'dora');
     assert.ok(audit.some(e => e.action === 'task.decided' && e.actor?.id === 'dora' && e.data?.reason === 'Budget fehlt'));
+  });
+
+  test('Wege nach Ergebnis: abgelehnt führt in den Weg «Abgelehnt», danach weiter; Probelauf folgt der Annahme', async () => {
+    const steps = [
+      {
+        id: 'ok', approval: { title: 'Freigabe {{subject.title}}', approvers: [{ team: { type: 'role', id: 'lead' } }], mode: 'first' },
+        branches: { approved: [{ id: 'yes', set: { path: 'genehmigt' } }], rejected: [{ id: 'no', set: { path: 'abgelehnt' } }] },
+      },
+      { id: 'after', set: { done: true } },
+    ];
+    const v1 = await call('ada', 'POST', '/v1/workflows', { name: 'Wege Fassung 1', scope: { type: 'shop', id: 'main' }, definition: { schemaVersion: 1, kind: 'automation', trigger: { manual: {} }, steps } });
+    const created = ok(v1, 201);
+    assert.equal(created.validation.ok, false, 'Wege brauchen Fassung 2');
+    assert.ok(created.validation.errors.some((e: { path: string }) => e.path === '/steps/0/branches'));
+    const id = await activeWorkflow('ada', 'Wege nach Ergebnis', steps, 2);
+    const checked = ok(await call('ada', 'POST', '/v1/workflows/validate', { definition: { schemaVersion: 2, kind: 'automation', trigger: { manual: {} }, steps: [steps[0]] } }));
+    assert.deepEqual([checked.ok, checked.warnings], [true, []], 'beide Wege haben Schritte: kein Hinweis');
+    const empty = ok(await call('ada', 'POST', '/v1/workflows/validate', { definition: { schemaVersion: 2, kind: 'automation', trigger: { manual: {} }, steps: [{ ...steps[0], branches: {} }] } }));
+    assert.deepEqual(empty.warnings.map((w: { message: string }) => w.message), ['Nach «Genehmigt» geschieht nichts', 'Nach «Abgelehnt» geschieht nichts']);
+
+    const dry = ok(await call('ada', 'POST', `/v1/workflows/${id}/dry-run`, { subject: { type: 'order', id: orders.o1 }, assume: { ok: 'rejected' } }));
+    assert.deepEqual(dry.steps.map((s: { path: string }) => s.path), ['/steps/0', '/steps/0/branches/rejected/0', '/steps/1']);
+    assert.deepEqual([dry.steps[0].outcomes, dry.steps[0].outcome], [['approved', 'rejected'], 'rejected']);
+    assert.match(dry.steps[0].summary, /angenommen: «Abgelehnt»/);
+    assert.deepEqual(dry.variables, { path: 'abgelehnt', done: true });
+    const standard = ok(await call('ada', 'POST', `/v1/workflows/${id}/dry-run`, { subject: { type: 'order', id: orders.o1 }, assume: { ok: 'vielleicht' } }));
+    assert.equal(standard.steps[1].path, '/steps/0/branches/approved/0', 'unbekannte Annahme: erstes Ergebnis');
+    status(await call('ada', 'POST', `/v1/workflows/${id}/dry-run`, { assume: { ok: 'x'.repeat(65) } }), 422);
+
+    const { runId, task } = await startWithTask('ada', id, orders.o1!);
+    ok(await call('dora', 'POST', `/v1/tasks/${task.id}/decide`, { decision: 'rejected', reason: 'Budget fehlt' }));
+    await drain();
+    assert.deepEqual(failures, []);
+    const run = await runOf(runId);
+    assert.deepEqual([run.state, run.variables], ['completed', { path: 'abgelehnt', done: true }]);
+    const logged = (await admin.query(`SELECT path FROM shop.workflow_step WHERE run_id = $1 AND state = 'completed' ORDER BY started_at, path`, [runId])).rows.map(r => r.path);
+    assert.deepEqual(logged, ['/steps/0', '/steps/0/branches/rejected/0', '/steps/1']);
   });
 
   test('Genehmigung «all» und «sequential»: alle müssen zustimmen, Reihenfolge zählt', async () => {

@@ -18,9 +18,11 @@
  *   `incident` ohne Job und ohne Ereignis (damit sich die Kette nicht über Ereignisse fortsetzt).
  * - Die Engine liest an der Lesesicht der Läufe vorbei (`workflow.engine = on`, lokal und danach zurückgesetzt).
  * - Probelauf: gleiche Schrittlogik, Aktionen nur über `dryRun`, alles in einem Savepoint, der zurückgerollt wird; weder
- *   `emit` noch `audit` noch Jobs. Aufgaben und Genehmigungen nimmt der Probelauf mit dem ersten Ergebnis als erledigt an.
+ *   `emit` noch `audit` noch Jobs. Aufgaben und Genehmigungen nimmt der Probelauf als erledigt an, mit dem Ergebnis aus
+ *   `assume` (je Schritt-ID), sonst dem ersten; danach folgt er dem Weg dieses Ergebnisses.
  * - Aufgaben (Stufe 2, `tasks.ts`): Ein Schritt `task` oder `approval` legt die Aufgabe im Savepoint an und setzt den
- *   Lauf auf `waiting` ohne `wake_at` und ohne Job; `resumeAfterTask` setzt ihn beim Erledigen fort. Jobs für einen so
+ *   Lauf auf `waiting` ohne `wake_at` und ohne Job; `resumeAfterTask` setzt ihn beim Erledigen im Weg des Ergebnisses
+ *   fort (`branches`, sonst nach dem Schritt). Jobs für einen so
  *   wartenden Lauf werden ignoriert. Endet ein Lauf, bricht `finish` seine offenen Aufgaben ab.
  * - Warten mit Arbeitszeit (`P2BD`, `PT4BH`) rechnet nach dem Standardkalender des Mandanten (`calendar.ts`).
  * - Der Mandant wird je `Tx` zwischengespeichert: Die App gibt je Transaktion ein eigenes `Tx` (keine wiederverwendete
@@ -30,8 +32,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Ajv, type ValidateFunction } from 'ajv';
 import { addWorkingTime } from './calendar.ts';
 import { addDuration, isBusinessDuration, nextCronTime } from './cron.ts';
-import { advance, END, END_FAILED, enter, loopBindings, stepAt, dropLoopsBelow, type Loops, type Position } from './cursor.ts';
-import type { ApprovalStep, OnError, Step, TaskStep, WorkflowDefinition } from './definition.ts';
+import { advance, afterOutcome, END, END_FAILED, enter, loopBindings, stepAt, dropLoopsBelow, type Loops, type Position } from './cursor.ts';
+import { outcomeName, outcomesOf, type ApprovalStep, type OnError, type Step, type TaskStep, type WorkflowDefinition } from './definition.ts';
 import { evaluateCondition, resolvePath, resolveValue, type Condition, type ExpressionContext } from './expressions.ts';
 import { FormChecker } from './forms.ts';
 import type {
@@ -119,6 +121,9 @@ export interface DryRunStep {
   allowed?: boolean;
   missing?: string[];
   error?: StepError;
+  /** Aufgabe oder Genehmigung: mögliche Ergebnisse und das angenommene (wählbar über `assume`). */
+  outcomes?: string[];
+  outcome?: string;
 }
 
 export interface DryRunResult {
@@ -216,6 +221,7 @@ export function stageProblems(def: WorkflowDefinition): { path: string; message:
       if ('wait' in s && s.wait.event) out.push({ path: `${p}/wait/event`, message: 'Warten auf ein Ereignis folgt in einer späteren Stufe (Warten auf Dauer oder Zeitpunkt geht)' });
       if ('if' in s) { walk(s.then, `${p}/then`); walk(s.else, `${p}/else`); }
       if ('foreach' in s) walk(s.steps, `${p}/steps`);
+      if (('task' in s || 'approval' in s) && s.branches) for (const [k, l] of Object.entries(s.branches)) walk(l, `${p}/branches/${k}`);
       walk(s.onError?.steps, `${p}/onError/steps`);
     }
   };
@@ -245,6 +251,8 @@ interface StepResult {
   missing?: string[];
   /** Schritt hat eine Aufgabe angelegt: Lauf wartet, bis sie erledigt ist. */
   waitTask?: string;
+  /** Probelauf einer Aufgabe oder Genehmigung: mögliche und angenommenes Ergebnis. */
+  outcome?: { options: string[]; chosen: string };
 }
 
 interface StartArgs {
@@ -684,7 +692,9 @@ export class Engine {
       const attempt = ((await tx.query<{ n: number }>(`SELECT coalesce(max(attempt), 0)::int AS n FROM ${this.t('workflow_step')} WHERE run_id = $1 AND path = $2`,
         [run.id, at.path])).rows[0]?.n ?? 0) + 1;
       await this.logStep(tx, run, at.path, step, attempt, 'completed', { output, startedAt: this.now() });
-      await this.continueAt(tx, run, advance(def, at.path, run.loops), { attempts: 0, outputs: { ...run.outputs, [step.id]: output } }, run.tenant_id);
+      const next = ('task' in step || 'approval' in step) && typeof output.outcome === 'string'
+        ? afterOutcome(def, at.path, step, output.outcome, run.loops) : advance(def, at.path, run.loops);
+      await this.continueAt(tx, run, next, { attempts: 0, outputs: { ...run.outputs, [step.id]: output } }, run.tenant_id);
       return true;
     });
   }
@@ -823,7 +833,7 @@ export class Engine {
   /** Logik eines Schritts, gemeinsam für Ausführung und Probelauf. */
   private async runStep(tx: Tx, def: WorkflowDefinition, step: Step, cursor: string,
     run: Pick<RunRow, 'id' | 'workflow_id' | 'version' | 'variables' | 'loops' | 'subject_type' | 'subject_id' | 'chain_depth'>, ctx: ExpressionContext,
-    o: { actor: ActorRef; scope: ScopeRef; attempt: number; limits: WorkflowLimits; dry: boolean; log: string[]; full?: RunRow }): Promise<StepResult> {
+    o: { actor: ActorRef; scope: ScopeRef; attempt: number; limits: WorkflowLimits; dry: boolean; log: string[]; full?: RunRow; assume?: Record<string, string> }): Promise<StepResult> {
     const loops = run.loops;
     const expr = <T>(fn: () => T): T => {
       try { return fn(); } catch (e) { throw new StepFailure('expression', e instanceof Error ? e.message : String(e)); }
@@ -910,7 +920,7 @@ export class Engine {
 
     if ('end' in step) {
       const message = step.end.message ? expr(() => String(resolveValue(step.end.message, ctx))) : null;
-      return { next: END, end: { state: step.end.result, message }, output: { result: step.end.result, message }, summary: `beendet den Lauf (${step.end.result})` };
+      return { next: END, end: { state: step.end.result, message }, output: { result: step.end.result, message }, summary: `beendet den Lauf: ${({ completed: 'erfolgreich', cancelled: 'abgebrochen', failed: 'fehlgeschlagen' } as const)[step.end.result]}` };
     }
 
     if ('task' in step || 'approval' in step) {
@@ -918,9 +928,14 @@ export class Engine {
       const what = 'task' in step ? 'die Aufgabe' : 'die Genehmigung';
       const title = expr(() => String(resolveValue(spec.title, ctx) ?? ''));
       if (o.dry || !o.full) {
-        const outcome = 'task' in step ? (step.task.outcomes?.[0] ?? 'done') : 'approved';
+        const options = outcomesOf(step);
+        const wanted = o.assume?.[step.id];
+        const outcome = wanted !== undefined && options.includes(wanted) ? wanted : options[0]!;
         const out = { taskId: null, outcome, values: {}, ...('approval' in step ? { votes: [], reason: null } : {}) };
-        return { next: advance(def, cursor, loops), input: { title }, output: out, stepOutput: out, summary: `würde ${what} «${title}» anlegen und warten (angenommen: «${outcome}»)` };
+        return {
+          next: afterOutcome(def, cursor, step, outcome, loops), input: { title }, output: out, stepOutput: out, outcome: { options, chosen: outcome },
+          summary: `würde ${what} «${title}» anlegen und warten (angenommen: «${outcomeName(outcome)}»)`,
+        };
       }
       const full = o.full;
       await tx.query('SAVEPOINT workflow_task');
@@ -980,6 +995,8 @@ export class Engine {
   async dryRun(tx: Tx, a: {
     workflowId: string; definition: WorkflowDefinition; actor: ActorRef; scope: ScopeRef; subject: SubjectRef | null;
     event: WorkflowEvent | null; input: Record<string, unknown> | null; limits: WorkflowLimits;
+    /** Angenommenes Ergebnis je Schritt-ID (Aufgabe, Genehmigung). */
+    assume?: Record<string, string>;
   }): Promise<DryRunResult> {
     const def = a.definition;
     const steps: DryRunStep[] = [];
@@ -1009,8 +1026,9 @@ export class Engine {
         const entry: DryRunStep = { path: cursor, stepId: step.id, kind: kindOf(step), label: step.label ?? null, summary: '' };
         steps.push(entry);
         try {
-          const r = await this.runStep(tx, def, step, cursor, run, ctx, { actor: a.actor, scope: a.scope, attempt: 1, limits: a.limits, dry: true, log: [] });
+          const r = await this.runStep(tx, def, step, cursor, run, ctx, { actor: a.actor, scope: a.scope, attempt: 1, limits: a.limits, dry: true, log: [], ...(a.assume ? { assume: a.assume } : {}) });
           entry.summary = r.summary ?? '';
+          if (r.outcome) { entry.outcomes = r.outcome.options; entry.outcome = r.outcome.chosen; }
           if (r.input !== undefined) entry.input = redact(r.input);
           if (r.output !== undefined) entry.output = redact(r.output);
           if (r.allowed !== undefined) { entry.allowed = r.allowed; if (r.missing?.length) entry.missing = r.missing; }

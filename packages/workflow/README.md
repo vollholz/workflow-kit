@@ -154,14 +154,14 @@ Abbrechen, Massenaktionen und die Ansicht «alle»; `queue:manage` (am `tenantSc
 | `GET`, `PUT /workflows/settings` | `workflow:admin` | Opt-in des Mandanten, Grenzen (nur senken), Zähler des Tages |
 | `GET /workflows` · `POST /workflows` | `workflow:read` · `workflow:manage` | Liste (Filter `state`, `scopeType`, `scopeId`) · Entwurf anlegen |
 | `GET`, `PUT`, `DELETE /workflows/:id` | `workflow:read` · `workflow:manage` | Entwurf lesen, ändern (`If-Match`), löschen (nur nie aktiv) |
-| `POST /workflows/validate` | angemeldet | `{ ok, errors, stage }` |
+| `POST /workflows/validate` | angemeldet | `{ ok, errors, stage, warnings }`; `warnings` hindern nicht (leerer Weg, Schritte nach «Beenden») |
 | `POST /workflows/:id/activate` | `workflow:activate` | Version anlegen, Auslöser neu; `actor` wahlweise (W6, `canActAs`) |
 | `POST /workflows/:id/pause`, `/archive` | `workflow:activate` | Auslöser entfernen |
 | `POST /workflows/schedule-preview` | Opt-in | nächste Ausführungen von Cron und Zeitzone (`ok`, `error`, `next`) |
 | `POST /workflows/:id/resume` | `workflow:activate` | pausiert → aktiv mit derselben Version und demselben Akteur; Auslöser neu; meldet `workflow.activated` mit `resumed: true` |
 | `GET /workflows/:id/versions`, `/versions/:version` | `workflow:read` | Versionen mit Prüfsumme und Definition |
 | `POST /workflows/:id/runs` | `workflow:run` | manueller Start mit Bezug und Eingabe |
-| `POST /workflows/:id/dry-run` | `workflow:manage` | Probelauf ohne zu schreiben (Entwurf, Definition oder Version) |
+| `POST /workflows/:id/dry-run` | `workflow:manage` | Probelauf ohne zu schreiben (Entwurf, Definition oder Version); `assume` (Schritt-ID → Ergebnis) wählt den Weg von Aufgabe und Genehmigung |
 | `GET /workflow-runs` | `workflow:read` | Läufe (Filter `workflowId`, `subjectType`, `subjectId`, `state`; `cursor`, `limit`) |
 | `GET /workflow-runs/:id` | `workflow:read` | Lauf mit Schrittprotokoll |
 | `POST /workflow-runs/:id/retry`, `/skip`, `/cancel` | `workflow:operate` | Vorfall lösen |

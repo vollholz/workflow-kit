@@ -11,7 +11,7 @@ Zustandsmodelle, Warteschlangen):
   Automationen, Migrationen (PostgreSQL, RLS), Job-Handler, Fastify-5-Plugin mit REST-Routen.
 - `packages/workflow-web` → `@vollholz/workflow-web`: React-19-Provider, Daten-Hooks (TanStack Query) und Bausteine.
 
-Stand: **workflow-web 0.6.0** (Feinschliff: Ablauf Schritt für Schritt mit Karten, Auswahl als Seitenleiste mit Gruppen, Kopf als Leiste mit einer Hauptaktion und Menü «Weitere Aktionen») auf **0.5.0** (Editor nach dem UX-Neukonzept, Etappe 2: Ablauf mit Detailbereich in `flow.tsx`, Einfügen an jeder
+Stand: **0.6.0 / workflow-web 0.7.0** (Etappe 3: Wege nach Ergebnis `branches` in Fassung 2 der Definition, Hinweise der Prüfung, Probelauf mit `assume` auf den Karten, Daten als Chips, «Änderungen ansehen» in `changes.tsx`, Pfade in `paths.ts`) auf **workflow-web 0.6.0** (Feinschliff: Ablauf Schritt für Schritt mit Karten, Auswahl als Seitenleiste mit Gruppen, Kopf als Leiste mit einer Hauptaktion und Menü «Weitere Aktionen») auf **0.5.0** (Editor nach dem UX-Neukonzept, Etappe 2: Ablauf mit Detailbereich in `flow.tsx`, Einfügen an jeder
 Stelle, Zeitplan als Auswahl mit `schedule-preview`, `VersionList`, `WorkflowSettings`; Etappe 1 in 0.4.0: Statusleiste,
 Entwurf speichert sich selbst, `resume`, Auswahl «Zuständig» mit Suche; Konzept `docs/konzepte/workflow-editor-ux.md` im Repository der ersten App) auf
 **Stufe 2** (Aufgaben und Warteschlangen, 0.3.0: `tasks.ts`, `task-routes.ts`, `calendar.ts`, `forms.ts`,

@@ -3,7 +3,7 @@
  * Vergleiche «Feld – Vergleich – Wert», verschachtelte Gruppen und «nicht». Kein freier Ausdruck, keine Skripte.
  *
  * Regeln: Felder mit Bezeichnung aus dem Kontext (`ContextField`), ein anderer Pfad lässt sich eintippen. Werte
- * passend zur Feldart (Zahl, Ja/Nein, Auswahl, Liste bei «ist einer von»); Text darf Platzhalter enthalten.
+ * passend zur Feldart (Zahl, Ja/Nein, Auswahl, Liste bei «ist einer von»); Text darf Daten (`{{…}}`) enthalten.
  * `describeCondition` liefert dieselbe Bedingung als Satz für Kopfzeilen und Zusammenfassungen.
  */
 import { useId } from 'react';

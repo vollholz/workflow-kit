@@ -26,18 +26,32 @@
  *   `onOpenSettings` öffnet «Name und Beschreibung …» diese statt des Dialogs.
  * - Probelauf und Hinweise nennen Schritte mit Nummer und Titel, nicht mit ihrer ID.
  * - Ohne `workflow:manage` (oder archiviert, oder eine Art späterer Stufen) ist alles nur lesbar.
+ *
+ * Etappe 3 (Sicherheit):
+ * - Die Prüfung meldet Fehler (hindern das Aktivieren) und Hinweise (hindern nicht, z. B. ein leerer Weg); beide stehen
+ *   getrennt in der Leiste und an den Karten.
+ * - Probelauf im Ablauf: Der Detailbereich fragt, womit durchgespielt wird (Bezug, Ereignis, Eingabe als Formular), die
+ *   Karten zeigen das Ergebnis je Schritt. Das angenommene Ergebnis einer Aufgabe oder Genehmigung wählt man an der Karte;
+ *   der Probelauf läuft dann neu. Nach Änderungen läuft er beim Wechsel in den Probelauf neu.
+ * - «Änderungen ansehen» vergleicht den Entwurf mit der aktiven Version; der Aktivieren-Dialog zeigt die Änderungen und
+ *   den Stand des Probelaufs (keiner, veraltet, Ergebnis). Ein Probelauf ist keine Pflicht (E3).
+ * - Mit dem ersten Weg nach Ergebnis hebt der Editor die Fassung der Definition auf 2.
  */
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import {
   useDeleteWorkflow, useDryRun, useSaveWorkflow, useValidateDefinition, useWorkflowDetail, useWorkflowLifecycle, useWorkflowMeta, useWorkflowVersion,
+  type DryRunBody,
 } from './api.ts';
-import { FlowView, listAt, numberOf, splitPath, StepDetail, stepAt, StepSheet, TriggerSheet, withList, type FlowSelection } from './flow.tsx';
-import { contextFields, walk } from './placeholders.tsx';
+import { ChangesList, diffDefinitions, type DefinitionChange } from './changes.tsx';
+import { FlowView, listAt, numberOf, splitPath, StepDetail, stepAt, StepSheet, TriggerSheet, withList, type FlowRun, type FlowSelection } from './flow.tsx';
+import { FieldForm } from './forms.tsx';
+import { branchesOf } from './paths.ts';
+import { contextFields, DataLabels, walk } from './placeholders.tsx';
 import { ActorName, useWorkflow, type WorkflowActor } from './provider.tsx';
-import { EditorCtx, placeOfPath, stepNumberOfPath, stepTitle, type EditorContext } from './steps.tsx';
+import { EditorCtx, placeOfPath, stepTitle, type EditorContext } from './steps.tsx';
 import { describeCron, describeTrigger, TriggerEditor, triggerOfKind } from './trigger.tsx';
 import type { AutomationDefinition, DefinitionError, DryRunJson, Step, WorkflowDefinition, WorkflowDetail, WorkflowMetaJson } from './types.ts';
-import { Badge, fmtTime, MissingRight, plural, WorkflowApiError } from './ui.tsx';
+import { Badge, fmtTime, MissingRight, outcomeLabel, plural, WorkflowApiError } from './ui.tsx';
 
 export interface StepListEditorProps {
   workflowId?: string | null;
@@ -61,6 +75,11 @@ const canonical = (v: unknown): string => JSON.stringify(v, (_k, x: unknown) =>
   x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map(k => [k, (x as Record<string, unknown>)[k]])) : x);
 const draftOf = (d: WorkflowDetail): Draft => ({ name: d.name, description: d.description ?? '', definition: d.definition });
 const isAutomation = (d: WorkflowDefinition): d is AutomationDefinition => d.kind === 'automation' && 'trigger' in d && Array.isArray((d as AutomationDefinition).steps);
+/** Wege nach Ergebnis brauchen Fassung 2: Mit dem ersten Weg hebt der Editor die Fassung an. */
+const upgrade = (d: WorkflowDefinition): WorkflowDefinition =>
+  isAutomation(d) && d.schemaVersion < 2 && [...walk(d.steps)].some(s => Object.keys(branchesOf(s)).length) ? { ...d, schemaVersion: 2 } : d;
+/** Womit der Probelauf durchspielt (ohne Definition und Annahmen). */
+type DryRunSetup = Omit<DryRunBody, 'definition' | 'assume' | 'version'>;
 
 function useDebounced<T>(value: T, ms: number): T {
   const [v, setV] = useState(value);
@@ -81,7 +100,7 @@ export function StepListEditor({ workflowId, onDeleted, onShowRuns, validateDela
   );
 }
 
-type DialogName = 'activate' | 'archive' | 'delete' | 'discard' | 'details';
+type DialogName = 'activate' | 'archive' | 'delete' | 'discard' | 'details' | 'changes';
 
 function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs, saveDelayMs, showTitle, onOpenSettings }: {
   detail: WorkflowDetail; refetch: () => Promise<WorkflowDetail | undefined>; onDeleted?: () => void; onShowRuns?: (id: string) => void;
@@ -115,14 +134,17 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
   const debounced = useDebounced(automation ? draft.definition : null, validateDelayMs);
   const validation = useValidateDefinition(readOnly ? null : debounced);
   const errors: DefinitionError[] = useMemo(() => [...(validation.data?.errors ?? []), ...(validation.data?.stage ?? [])], [validation.data]);
+  const warnings: DefinitionError[] = useMemo(() => validation.data?.warnings ?? [], [validation.data]);
   const ids = useRef(new Set<string>());
   ids.current = new Set(automation ? [...walk((draft.definition as AutomationDefinition).steps)].map(s => s.id) : []);
   const latest = useRef({ draft, revision: detail.revision });
   latest.current = { draft, revision: detail.revision };
   const subjectLabel = (type: string) => w.subjects[type]?.label ?? meta.data?.subjectTypes.find(s => s.type === type)?.label ?? type;
-  const fields = automation ? contextFields(draft.definition as AutomationDefinition, meta.data, subjectLabel) : [];
+  const def = draft.definition as AutomationDefinition;
+  const fields = automation ? contextFields(def, meta.data, subjectLabel) : [];
   const ctx: EditorContext = {
-    meta: meta.data, fields, errors, readOnly,
+    meta: meta.data, fields, allFields: fields, errors, warnings, readOnly, steps: automation ? def.steps : [],
+    fieldsAt: path => (automation ? contextFields(def, meta.data, subjectLabel, path) : []),
     newId: () => {
       let n = ids.current.size + 1;
       while (ids.current.has(`s${n}`)) n++;
@@ -130,8 +152,7 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
       return `s${n}`;
     },
   };
-  const def = draft.definition as AutomationDefinition;
-  const setDefinition = (d: WorkflowDefinition) => setDraft(x => ({ ...x, definition: d }));
+  const setDefinition = (d: WorkflowDefinition) => setDraft(x => ({ ...x, definition: upgrade(d) }));
   const adopt = (d: WorkflowDetail) => { setDraft(draftOf(d)); setBase(draftOf(d)); };
   const steps = automation ? def.steps : [];
   const setSteps = (next: Step[]) => setDefinition({ ...def, steps: next });
@@ -146,7 +167,7 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
     const step = stepAt(steps, path);
     if (!step) return;
     const { list, index } = splitPath(path);
-    setRemoved({ label: `Schritt ${numberOf(path)} (${stepTitle(step, meta.data)})`, definition: latest.current.draft.definition });
+    setRemoved({ label: `Schritt ${numberOf(path, steps)} (${stepTitle(step, meta.data)})`, definition: latest.current.draft.definition });
     const rest = (listAt(steps, list) ?? []).length - 1;
     setSteps(withList(steps, list, l => l.filter((_, j) => j !== index)));
     setSel(rest > 0 ? { kind: 'step', path: `${list}/${Math.min(index, rest - 1)}` } : list === '/steps' ? { kind: 'trigger' } : { kind: 'step', path: list.slice(0, list.lastIndexOf('/')) });
@@ -220,6 +241,7 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
   const otherErrors = errors.filter(e => !e.path.startsWith('/trigger') && !e.path.startsWith('/steps/'));
   const versionDef = activeVersion.data?.definition;
   const differs = !!versionDef && canonical(versionDef) !== canonical(draft.definition);
+  const changes: DefinitionChange[] | null = versionDef && isAutomation(versionDef) && automation ? diffDefinitions(versionDef, def, meta.data) : null;
   const canActivate = w.can('workflow:activate') && automation;
   const canManage = w.can('workflow:manage');
   const nextVersion = (detail.activeVersion ?? 0) + 1;
@@ -236,17 +258,46 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
   const selectInFlow = (s: FlowSelection) => {
     if (s.kind === 'insert') { setSheet({ mode: 'step', list: s.list, index: s.index }); return; }
     setSel(s);
-    if (mode === 'sim') setMode('edit');
   };
-  /** Zur ersten Stelle mit einem Hinweis springen (Auslöser oder Schritt). */
-  const goToIssue = () => {
-    const first = errors[0];
+  /** Zur ersten Stelle mit einem Fehler bzw. Hinweis springen (Auslöser oder Schritt). */
+  const goTo = (list: DefinitionError[]) => {
+    const first = list[0];
     if (!first) return;
     setMode('edit');
-    const m = /^\/steps(?:\/\d+\/(?:then|else|steps))*\/\d+/.exec(first.path);
+    const m = /^\/steps(?:\/\d+\/(?:then|else|steps|onError\/steps|branches\/[^/]+))*\/\d+/.exec(first.path);
     setSel(m ? { kind: 'step', path: m[0] } : { kind: 'trigger' });
     openDetail.current = true;
   };
+
+  // Probelauf: womit durchgespielt wird, angenommene Ergebnisse, letztes Ergebnis mit dem Stand des Entwurfs.
+  const dry = useDryRun(detail.id);
+  const [setup, setSetup] = useState<DryRunSetup | null>(null);
+  const [assume, setAssume] = useState<Record<string, string>>({});
+  const [lastRun, setLastRun] = useState<{ key: string; result: DryRunJson } | null>(null);
+  const defKey = automation ? canonical(def) : '';
+  const stale = !!lastRun && lastRun.key !== defKey;
+  const runDry = (body: DryRunSetup, nextAssume = assume) => {
+    setSetup(body);
+    const key = canonical(def);
+    dry.mutate({ ...body, definition: def, assume: nextAssume }, { onSuccess: r => setLastRun({ key, result: r }) });
+  };
+  const runDryRef = useRef(runDry);
+  runDryRef.current = runDry;
+  const onAssume = (stepId: string, outcome: string) => {
+    const next = { ...assume, [stepId]: outcome };
+    setAssume(next);
+    if (setup) runDry(setup, next);
+  };
+  // Nach Änderungen: beim Wechsel in den Probelauf mit derselben Wahl neu durchspielen.
+  useEffect(() => {
+    if (mode === 'sim' && setup && stale && !dry.isPending) runDryRef.current(setup);
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
+  const flowRun: FlowRun | null = mode === 'sim' && lastRun && !stale
+    ? { steps: new Map(lastRun.result.steps.map(x => [x.path, x])), triggerMatches: lastRun.result.triggerMatches, onAssume, busy: dry.isPending }
+    : null;
+  const probe: ProbeState = !lastRun ? { state: 'none', text: 'Noch kein Probelauf mit diesem Entwurf.' }
+    : stale ? { state: 'stale', text: 'Der letzte Probelauf ist älter als die letzten Änderungen.' }
+      : { state: lastRun.result.result === 'completed' && lastRun.result.triggerMatches !== false ? 'ok' : 'bad', text: `Probelauf mit diesem Entwurf: ${RESULT_LABEL[lastRun.result.result]}.` };
 
   const pause = () => life.pause.mutate(undefined, { onSuccess: d => { adopt(d); setNotice('Workflow pausiert.'); } });
   const resume = () => life.resume.mutate(undefined, { onSuccess: d => { adopt(d); setNotice(`Workflow läuft wieder mit Version ${d.activeVersion}.`); } });
@@ -276,6 +327,7 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
       if (canLife) menu.push({ label: 'Pausieren', onSelect: pause }, { label: 'Archivieren …', danger: true, onSelect: () => setDialog('archive') });
     }
   }
+  if (differs && changes) menu.push({ label: 'Änderungen ansehen', onSelect: () => setDialog('changes') });
   if (!readOnly) menu.push({ label: 'Name und Beschreibung …', onSelect: () => (onOpenSettings ? onOpenSettings() : setDialog('details')) });
   if (onShowRuns) menu.push({ label: 'Läufe ansehen', onSelect: () => onShowRuns(detail.id) });
   const saveState: ReactNode = readOnly || conflict ? null
@@ -284,10 +336,11 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
         : dirty ? 'Speichert gleich …'
           : savedAt ? <span title={`Gespeichert um ${fmtTime(savedAt)}`}>Gespeichert</span> : 'Gespeichert';
   const where = (list: string, index: number) => (list === '/steps' && index === 0 ? 'nach dem Auslöser'
-    : index === 0 ? `am Anfang von ${laneName(list)}` : `nach Schritt ${numberOf(`${list}/${index - 1}`)}`);
+    : index === 0 ? `am Anfang von ${laneName(list, steps)}` : `nach Schritt ${numberOf(`${list}/${index - 1}`, steps)}`);
 
   return (
     <EditorCtx.Provider value={ctx}>
+      <DataLabels.Provider value={fields}>
       <div className="wf-editor">
         {showTitle ? (
           <header className="wf-editor-head">
@@ -298,9 +351,12 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
         <div className="wf-bar" role="group" aria-label="Zustand des Workflows">
           <div className="wf-bar-state">
             <Badge tone={state.tone}>{state.label}</Badge>
-            {state.note ? <span className="wf-bar-note">{state.note}</span> : null}
+            {state.note ? (differs && changes
+              ? <button type="button" className="wf-bar-note wf-bar-link" onClick={() => setDialog('changes')}>{state.note}</button>
+              : <span className="wf-bar-note">{state.note}</span>) : null}
             {saveState ? <span className="wf-bar-save" aria-live="polite">{saveState}</span> : null}
-            {!readOnly && errors.length ? <button type="button" className="wf-bar-issues" onClick={goToIssue}>{plural(errors.length, 'Hinweis', 'Hinweise')}</button> : null}
+            {!readOnly && errors.length ? <button type="button" className="wf-bar-issues" onClick={() => goTo(errors)}>{plural(errors.length, 'Fehler', 'Fehler')}</button> : null}
+            {!readOnly && warnings.length ? <button type="button" className="wf-bar-hints" onClick={() => goTo(warnings)}>{plural(warnings.length, 'Hinweis', 'Hinweise')}</button> : null}
           </div>
           {automation ? (
             <div className="wf-seg" role="group" aria-label="Ansicht">
@@ -324,10 +380,10 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
         {automation ? (
           <div className="wf-editor-grid">
             <div className="wf-editor-main">
-              <FlowView steps={steps} trigger={triggerChosen ? { value: def.trigger, text: describeTrigger(def.trigger, meta.data) } : null} sel={sel}
+              <FlowView steps={steps} run={flowRun} locked={mode === 'sim'} trigger={triggerChosen ? { value: def.trigger, text: describeTrigger(def.trigger, meta.data) } : null} sel={sel}
                 onSelect={selectInFlow} onAddFirst={() => setSheet({ mode: 'trigger' })} onMove={move} onRemove={remove}
                 onOpen={() => { openDetail.current = true; setSel(x => ({ ...x })); }} />
-              {otherErrors.length ? <ul className="wf-step-errors" aria-label="Weitere Hinweise">{otherErrors.map((e, i) => <li key={i}>{placeOfPath(e.path)}: {e.message}</li>)}</ul> : null}
+              {otherErrors.length ? <ul className="wf-step-errors" aria-label="Weitere Fehler">{otherErrors.map((e, i) => <li key={i}>{placeOfPath(e.path, steps)}: {e.message}</li>)}</ul> : null}
               {removed ? (
                 <div className="wf-undo" role="status">
                   <span className="wf-grow">{`${removed.label} entfernt.`}</span>
@@ -337,7 +393,10 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
               ) : null}
             </div>
             <aside className="wf-editor-side wf-detail" ref={detailRef} aria-label={mode === 'sim' ? 'Probelauf' : 'Detail'}>
-              {mode === 'sim' ? <DryRunPanel workflowId={detail.id} definition={def} meta={meta.data} />
+              {mode === 'sim' ? (
+                <DryRunPanel definition={def} meta={meta.data} result={lastRun && !stale ? lastRun.result : null} busy={dry.isPending} error={dry.isError ? dry.error : null}
+                  selected={sel.kind === 'step' ? sel.path : null} canRun={w.can('workflow:manage')} onStart={body => runDry(body)} />
+              )
                 : !triggerChosen ? (
                   <div className="wf-detail-empty"><b>Noch kein Schritt</b><p>Beginne links mit «Ersten Schritt hinzufügen»: Wähle, wie der Workflow startet.</p></div>
                 ) : selected && sel.kind === 'step' ? (
@@ -351,6 +410,7 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
           </div>
         ) : null}
       </div>
+      </DataLabels.Provider>
       {sheet?.mode === 'trigger' ? <TriggerSheet onPick={pickTrigger} onClose={() => setSheet(null)} /> : null}
       {sheet?.mode === 'step' ? (
         <StepSheet where={where(sheet.list, sheet.index)} onClose={() => setSheet(null)}
@@ -367,7 +427,8 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
           onApply={(name, description) => { setDraft(x => ({ ...x, name, description })); setDialog(null); }} />
       ) : null}
       {dialog === 'activate' ? (
-        <ActivateDialog detail={detail} definition={def} meta={meta.data} dirty={dirty} errors={errors} onClose={() => setDialog(null)}
+        <ActivateDialog detail={detail} definition={def} meta={meta.data} dirty={dirty} errors={errors} warnings={warnings} changes={changes} probe={probe}
+          onProbe={() => { setDialog(null); setMode('sim'); }} onClose={() => setDialog(null)}
           onActivate={async actor => {
             let revision = detail.revision;
             if (dirty || saving) { const saved = await doSave(); if (!saved) return false; revision = saved.revision; }
@@ -376,6 +437,13 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs,
             setNotice(`Version ${d.activeVersion} ist aktiv.`);
             return true;
           }} error={life.activate.error} busy={life.activate.isPending || saving} />
+      ) : null}
+      {dialog === 'changes' && changes ? (
+        <ui.Dialog title={`Änderungen gegenüber Version ${detail.activeVersion}`} onClose={() => setDialog(null)} width={560}
+          footer={<ui.Button data-autofocus onClick={() => setDialog(null)}>Schliessen</ui.Button>}>
+          <p className="wf-hint">Der Entwurf wirkt erst nach dem Aktivieren; bis dahin läuft Version {detail.activeVersion}.</p>
+          <ChangesList changes={changes} />
+        </ui.Dialog>
       ) : null}
       {dialog === 'discard' && versionDef ? (
         <ui.Dialog title="Entwurf verwerfen?" role="alertdialog" onClose={() => setDialog(null)}
@@ -485,8 +553,11 @@ function DetailsDialog({ name, description, onClose, onApply }: { name: string; 
 
 // ---------------------------------------------------------------- Aktivieren
 
-function ActivateDialog({ detail, definition, meta, dirty, errors, onClose, onActivate, error, busy }: {
+interface ProbeState { state: 'none' | 'stale' | 'ok' | 'bad'; text: string }
+
+function ActivateDialog({ detail, definition, meta, dirty, errors, warnings, changes, probe, onProbe, onClose, onActivate, error, busy }: {
   detail: WorkflowDetail; definition: AutomationDefinition; meta: WorkflowMetaJson | undefined; dirty: boolean; errors: DefinitionError[];
+  warnings: DefinitionError[]; changes: DefinitionChange[] | null; probe: ProbeState; onProbe: () => void;
   onClose: () => void; onActivate: (actor?: WorkflowActor) => Promise<boolean>; error: Error | null; busy: boolean;
 }) {
   const w = useWorkflow();
@@ -522,6 +593,16 @@ function ActivateDialog({ detail, definition, meta, dirty, errors, onClose, onAc
         {'schedule' in t ? <><dt>Zeitplan</dt><dd>{describeCron(t.schedule.cron) ?? t.schedule.cron} · Zeitzone {t.schedule.timezone}</dd></> : null}
         <dt>Schritte</dt><dd>{[...walk(definition.steps)].length}</dd>
       </dl>
+      {changes ? (
+        <section className="wf-activate-part" aria-label={`Änderungen gegenüber Version ${detail.activeVersion}`}>
+          <h4>Änderungen gegenüber Version {detail.activeVersion}</h4>
+          <ChangesList changes={changes} />
+        </section>
+      ) : null}
+      <p className={`wf-probe ${probe.state}`}>
+        {probe.text}{' '}
+        {probe.state === 'none' || probe.state === 'stale' ? <button type="button" className="wf-link" onClick={onProbe}>Zum Probelauf</button> : null}
+      </p>
       <fieldset className="wf-field">
         <legend>Handelt als: in wessen Namen der Workflow handelt</legend>
         <div className="wf-check-row">
@@ -541,7 +622,13 @@ function ActivateDialog({ detail, definition, meta, dirty, errors, onClose, onAc
       {errors.length && tried ? (
         <div className="wf-bad" role="alert">
           <p>{errors.length === 1 ? 'Zuerst diese Stelle beheben:' : `Zuerst diese ${errors.length} Stellen beheben:`}</p>
-          <ul>{errors.map((e, i) => <li key={i}>{placeOfPath(e.path)}: {e.message}</li>)}</ul>
+          <ul>{errors.map((e, i) => <li key={i}>{placeOfPath(e.path, definition.steps)}: {e.message}</li>)}</ul>
+        </div>
+      ) : null}
+      {warnings.length ? (
+        <div className="wf-hint">
+          <p>{warnings.length === 1 ? 'Ein Hinweis der Prüfung (hindert nicht):' : `${warnings.length} Hinweise der Prüfung (hindern nicht):`}</p>
+          <ul>{warnings.map((e, i) => <li key={i}>{placeOfPath(e.path, definition.steps)}: {e.message}</li>)}</ul>
         </div>
       ) : null}
       {failed || error ? <ui.ErrorBox error={failed ?? error} /> : null}
@@ -551,15 +638,26 @@ function ActivateDialog({ detail, definition, meta, dirty, errors, onClose, onAc
 
 // ---------------------------------------------------------------- Probelauf
 
-const laneName = (list: string) => (list.endsWith('/then') ? `«Dann» in Schritt ${numberOf(list.slice(0, list.lastIndexOf('/')))}` : list.endsWith('/else') ? `«Sonst» in Schritt ${numberOf(list.slice(0, list.lastIndexOf('/')))}` : `der Schleife in Schritt ${numberOf(list.slice(0, list.lastIndexOf('/')))}`);
+const laneName = (list: string, steps: Step[]) => {
+  const owner = list.replace(/\/(then|else|steps|branches\/[^/]+)$/, '');
+  const n = numberOf(owner, steps);
+  const way = /\/branches\/([^/]+)$/.exec(list);
+  return way ? `«${outcomeLabel(way[1])}» in Schritt ${n}` : list.endsWith('/then') ? `«Dann» in Schritt ${n}` : list.endsWith('/else') ? `«Sonst» in Schritt ${n}` : `der Schleife in Schritt ${n}`;
+};
 
 const RESULT_LABEL: Record<DryRunJson['result'], string> = { completed: 'würde erfolgreich enden', failed: 'würde scheitern', cancelled: 'würde abgebrochen', limit: 'würde an eine Grenze stossen' };
 
-function DryRunPanel({ workflowId, definition, meta }: { workflowId: string; definition: AutomationDefinition; meta: WorkflowMetaJson | undefined }) {
+/**
+ * Probelauf im Detailbereich: womit durchgespielt wird (Bezug, Ereignis, Eingabe als Formular), das Ergebnis und die
+ * Angaben zum gewählten Schritt. Was je Schritt geschähe, zeigen die Karten im Ablauf.
+ */
+function DryRunPanel({ definition, meta, result, busy, error, selected, canRun, onStart }: {
+  definition: AutomationDefinition; meta: WorkflowMetaJson | undefined; result: DryRunJson | null; busy: boolean; error: Error | null;
+  selected: string | null; canRun: boolean; onStart: (body: DryRunSetup) => void;
+}) {
   const w = useWorkflow();
   const { ui } = w;
   const id = useId();
-  const run = useDryRun(workflowId);
   const t = definition.trigger;
   const eventType = 'event' in t ? t.event : '';
   const [mode, setMode] = useState<'subject' | 'event'>('subject');
@@ -569,17 +667,18 @@ function DryRunPanel({ workflowId, definition, meta }: { workflowId: string; def
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<{ id: string; title: string }[] | null>(null);
   const [eventJson, setEventJson] = useState(() => JSON.stringify({ type: eventType, subject: null, data: {} }, null, 2));
-  const [inputJson, setInputJson] = useState('{}');
+  const [input, setInput] = useState<Record<string, unknown>>({});
   const [jsonError, setJsonError] = useState<string | null>(null);
   const types = meta?.subjectTypes ?? [];
   const evSubject = meta?.events.find(e => e.type === eventType)?.subjectType;
   const subjectType = type || evSubject || types[0]?.type || '';
   const cfg = w.subjects[subjectType];
+  const form = 'manual' in t ? t.manual.form ?? [] : [];
   const search = async () => { if (cfg?.search) setHits(await cfg.search(q)); };
   const start = () => {
     setJsonError(null);
     try {
-      const body: Parameters<typeof run.mutate>[0] = { definition };
+      const body: DryRunSetup = {};
       if (mode === 'event') {
         const ev = JSON.parse(eventJson) as { type?: string; subject?: { type: string; id: string } | null; data?: Record<string, unknown> };
         if (!ev || typeof ev.type !== 'string') throw new Error('type');
@@ -588,14 +687,14 @@ function DryRunPanel({ workflowId, definition, meta }: { workflowId: string; def
         const sid = cfg?.search ? chosen?.id : subjectId;
         if (sid) body.subject = { type: subjectType, id: sid };
       }
-      if ('manual' in t) body.input = JSON.parse(inputJson || '{}') as Record<string, unknown>;
-      run.mutate(body);
+      if ('manual' in t) body.input = input;
+      onStart(body);
     } catch { setJsonError('Bitte gültiges JSON eingeben (beim Ereignis mit «type»).'); }
   };
   return (
     <section className="wf-section wf-dryrun" aria-labelledby={`${id}-h`}>
       <h3 id={`${id}-h`}>Probelauf</h3>
-      <p className="wf-hint">Zeigt je Schritt, was geschähe – ohne etwas zu ändern. Verwendet den Entwurf, wie er jetzt dasteht.</p>
+      <p className="wf-hint">Spielt den Entwurf durch, ohne etwas zu ändern. Was geschähe, steht an den Schritten im Ablauf; bei Aufgaben und Genehmigungen wählst du dort das Ergebnis.</p>
       <div className="wf-row" role="radiogroup" aria-label="Probelauf mit">
         <span className="wf-check-row"><input type="radio" className="wf-check" id={`${id}-ms`} checked={mode === 'subject'} onChange={() => setMode('subject')} /><label htmlFor={`${id}-ms`}>Bezug wählen</label></span>
         <span className="wf-check-row"><input type="radio" className="wf-check" id={`${id}-me`} checked={mode === 'event'} onChange={() => setMode('event')} /><label htmlFor={`${id}-me`}>Ereignis als JSON</label></span>
@@ -645,42 +744,44 @@ function DryRunPanel({ workflowId, definition, meta }: { workflowId: string; def
           <ui.Textarea id={`${id}-ev`} rows={6} value={eventJson} onChange={e => setEventJson(e.target.value)} />
         </div>
       )}
-      {'manual' in t ? (
-        <div className="wf-field">
-          <label htmlFor={`${id}-in`}>Eingabe beim Start (JSON)</label>
-          <ui.Textarea id={`${id}-in`} rows={3} value={inputJson} onChange={e => setInputJson(e.target.value)} />
-        </div>
+      {form.length ? (
+        <fieldset className="wf-field">
+          <legend>Eingabe beim Start</legend>
+          <FieldForm fields={form} value={input} onChange={setInput} />
+        </fieldset>
       ) : null}
-      <ui.Button variant="primary" aria-disabled={run.isPending || undefined} disabled={!w.can('workflow:manage')} onClick={() => { if (!run.isPending) start(); }}>{run.isPending ? 'Probelauf läuft …' : 'Probelauf starten'}</ui.Button>
+      <ui.Button variant={result ? 'default' : 'primary'} aria-disabled={busy || undefined} disabled={!canRun} onClick={() => { if (!busy) start(); }}>
+        {busy ? 'Probelauf läuft …' : result ? 'Erneut durchspielen' : 'Probelauf starten'}
+      </ui.Button>
       {jsonError ? <p className="wf-bad" role="alert">{jsonError}</p> : null}
-      {run.isError ? <ui.ErrorBox error={run.error} /> : null}
-      {run.data ? <DryRunResult result={run.data} definition={definition} meta={meta} /> : null}
+      {error ? <ui.ErrorBox error={error} /> : null}
+      {result ? <DryRunSummary result={result} definition={definition} meta={meta} selected={selected} /> : null}
     </section>
   );
 }
 
-function DryRunResult({ result, definition, meta }: { result: DryRunJson; definition: AutomationDefinition; meta: WorkflowMetaJson | undefined }) {
-  const byId = new Map([...walk(definition.steps)].map(s => [s.id, s]));
+/** Ergebnis des Probelaufs: Gesamtergebnis, angenommene Ergebnisse, Angaben zum gewählten Schritt. */
+function DryRunSummary({ result, definition, meta, selected }: { result: DryRunJson; definition: AutomationDefinition; meta: WorkflowMetaJson | undefined; selected: string | null }) {
+  const at = selected ? result.steps.find(x => x.path === selected) : undefined;
+  const step = selected ? stepAt(definition.steps, selected) : undefined;
+  const assumed = result.steps.filter(x => x.outcome !== undefined && (x.outcomes?.length ?? 0) > 1);
+  const name = (path: string) => `Schritt ${numberOf(path, definition.steps)}`;
   return (
-    <div className="wf-dryrun-result" aria-label="Ergebnis des Probelaufs" role="region">
-      {result.triggerMatches !== null ? <p>{result.triggerMatches ? 'Das Ereignis passt zum Filter des Auslösers.' : 'Das Ereignis passt nicht zum Filter: Der Workflow würde nicht starten.'}</p> : null}
-      <p><b>Ergebnis:</b> {RESULT_LABEL[result.result]}</p>
-      <ol className="wf-plain">
-        {result.steps.map((s, i) => {
-          const step = byId.get(s.stepId);
-          const name = `Schritt ${stepNumberOfPath(s.path) ?? i + 1}${step ? ` · ${stepTitle(step, meta)}` : s.label ? ` · ${s.label}` : ''}`;
-          return (
-            <li key={i} className={s.error || s.allowed === false ? 'bad' : ''}>
-              <b>{name}</b>: {s.summary}
-              {s.allowed === false ? <div className="wf-bad">Dem Akteur fehlen Rechte: {(s.missing ?? []).join(', ')}</div> : null}
-              {s.error ? <div className="wf-bad">{s.error.message}</div> : null}
-              {s.input !== undefined || s.output !== undefined ? (
-                <details className="wf-json"><summary>Technische Details</summary><pre>{JSON.stringify({ eingabe: s.input, ausgabe: s.output }, null, 2)}</pre></details>
-              ) : null}
-            </li>
-          );
-        })}
-      </ol>
+    <div className="wf-dryrun-result" role="region" aria-label="Ergebnis des Probelaufs">
+      {result.triggerMatches === false ? <p className="wf-bad">Das Ereignis passt nicht zum Filter: Der Workflow würde nicht starten.</p> : null}
+      <p><b>Ergebnis:</b> {RESULT_LABEL[result.result]} · {plural(result.steps.length, 'Schritt', 'Schritte')} durchlaufen</p>
+      {assumed.length ? <p className="wf-hint">{`Angenommen: ${assumed.map(x => `${name(x.path)} «${outcomeLabel(x.outcome)}»`).join(', ')}`}</p> : null}
+      {selected ? (at ? (
+        <div className="wf-dryrun-step">
+          <h4>{`${name(selected)}${step ? ` · ${stepTitle(step, meta)}` : ''}`}</h4>
+          <p>{at.summary}</p>
+          {at.allowed === false ? <p className="wf-bad">Dem Akteur fehlen Rechte: {(at.missing ?? []).join(', ')}</p> : null}
+          {at.error ? <p className="wf-bad">{at.error.message}</p> : null}
+          {at.input !== undefined || at.output !== undefined ? (
+            <details className="wf-json"><summary>Technische Details</summary><pre>{JSON.stringify({ eingabe: at.input, ausgabe: at.output }, null, 2)}</pre></details>
+          ) : null}
+        </div>
+      ) : <p className="wf-muted">{`${name(selected)} wird in diesem Probelauf nicht erreicht.`}</p>) : <p className="wf-hint">Wähle im Ablauf einen Schritt, um Einzelheiten zu sehen.</p>}
       {Object.keys(result.variables).length ? <details className="wf-json"><summary>Variablen am Ende</summary><pre>{JSON.stringify(result.variables, null, 2)}</pre></details> : null}
     </div>
   );

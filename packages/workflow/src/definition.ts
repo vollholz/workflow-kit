@@ -5,18 +5,26 @@
  * Schritt hat eine `id` und genau eine Art: `action`, `if`, `foreach`, `wait`, `task`, `approval`, `subflow`, `end` oder
  * `set`. Bedingungen sind strukturierte Ausdrücke (`expressions.ts`), Texte dürfen Platzhalter enthalten.
  *
+ * Fassung 2 (UX-Neukonzept E2): Aufgabe und Genehmigung tragen Wege nach Ergebnis (`branches`, Ergebnis → Schritte);
+ * nach dem Weg geht es nach dem Schritt weiter. Ergebnisse einer Aufgabe sind Text (z. B. «Nachbessern»), ohne «/» und
+ * «~». Fassung 1 bleibt gültig, kennt aber keine Wege.
+ *
  * Regeln:
  * - Das Schema ist versioniert (`schemaVersion`); eine neue Fassung bekommt eine neue Nummer, alte bleiben lesbar.
  * - `validateDefinition` prüft zuerst das Schema (ajv), dann den Inhalt (eindeutige Schritt-IDs, Verweise auf
  *   Schritte, Platzhalter, Zustände). Meldungen sind deutsch und tragen den Pfad als JSON Pointer (`/steps/0/if`).
+ * - Dazu Hinweise (`warnings`), die nicht hindern: ein Weg, auf dem nichts geschieht, Schritte nach «Beenden», ein
+ *   «Wenn» ohne Schritte.
  * - Fachliche Schlüssel (Aktionen, Ereignistypen) kennt das Paket nicht; wer sie prüfen will, übergibt sie in `known`.
  */
 import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
 import { CONDITION_OPS, isValidPath, parseTemplate, UNARY_OPS, type Condition } from './expressions.ts';
 import type { ActorRef, FieldDef, JsonSchema, TeamRef } from './ports.ts';
 
-/** Aktuelle Fassung des Definitionsschemas. */
-export const DEFINITION_SCHEMA_VERSION = 1;
+/** Aktuelle Fassung des Definitionsschemas (2: Wege nach Ergebnis). */
+export const DEFINITION_SCHEMA_VERSION = 2;
+/** Fassungen, die gelesen und geprüft werden. */
+export type DefinitionSchemaVersion = 1 | 2;
 
 export type WorkflowKind = 'automation' | 'case' | 'state_model';
 /** Dauer nach ISO 8601, zusätzlich Arbeitstage `BD` und Arbeitsstunden `BH` (z. B. `P3BD`, `PT8BH`, `PT4H`). */
@@ -62,6 +70,8 @@ export interface TaskStep extends StepBase {
     title: string; description?: string; assignee: Assignee; form?: FieldDef[]; outcomes?: string[]; due?: Duration; priority?: TaskPriority;
     escalation?: Escalation;
   };
+  /** Wege nach Ergebnis (Fassung 2): Schritte je Ergebnis, danach weiter nach der Aufgabe. */
+  branches?: Record<string, Step[]>;
 }
 export type ApprovalMode = 'first' | 'all' | 'majority' | 'sequential';
 export interface ApprovalStep extends StepBase {
@@ -70,6 +80,8 @@ export interface ApprovalStep extends StepBase {
     /** Begründung bei Ablehnung Pflicht (Standard `true`). */
     reasonOnReject?: boolean; escalation?: Escalation;
   };
+  /** Wege nach Ergebnis (Fassung 2). */
+  branches?: { approved?: Step[]; rejected?: Step[] };
 }
 export interface SubflowStep extends StepBase { subflow: { workflow: string; input?: Record<string, unknown>; wait?: boolean } }
 export interface EndStep extends StepBase { end: { result: 'completed' | 'cancelled' | 'failed'; message?: string } }
@@ -94,7 +106,7 @@ export interface StateTransition {
 }
 
 interface DefinitionBase {
-  schemaVersion: typeof DEFINITION_SCHEMA_VERSION;
+  schemaVersion: DefinitionSchemaVersion;
   name?: string;
   description?: string;
   variables?: Record<string, unknown>;
@@ -112,7 +124,20 @@ export interface StateModelDefinition extends DefinitionBase {
 export type WorkflowDefinition = AutomationDefinition | CaseDefinition | StateModelDefinition;
 
 export interface DefinitionError { path: string; message: string }
-export type DefinitionResult = { ok: true; definition: WorkflowDefinition; errors: [] } | { ok: false; errors: DefinitionError[] };
+/** Ergebnis der Prüfung; `warnings` sind Hinweise, die nicht hindern (nur bei gültigem Schema). */
+export type DefinitionResult =
+  | { ok: true; definition: WorkflowDefinition; errors: []; warnings: DefinitionError[] }
+  | { ok: false; errors: DefinitionError[]; warnings: DefinitionError[] };
+
+/** Ergebnisse einer Aufgabe bzw. Genehmigung (ohne Angabe bei der Aufgabe: `done`). */
+export function outcomesOf(step: TaskStep | ApprovalStep): string[] {
+  return 'approval' in step ? ['approved', 'rejected'] : (step.task.outcomes?.length ? step.task.outcomes : ['done']);
+}
+
+/** Bezeichnung eines Ergebnisses für Meldungen («done» → «Erledigt»). */
+export function outcomeName(outcome: string): string {
+  return ({ done: 'Erledigt', approved: 'Genehmigt', rejected: 'Abgelehnt', cancelled: 'Abgebrochen' } as Record<string, string>)[outcome] ?? outcome;
+}
 
 export interface ValidateOptions {
   /** Bekannte Schlüssel; fehlt eine Liste, wird nicht dagegen geprüft. */
@@ -145,7 +170,7 @@ export const definitionSchema: JsonSchema = {
   required: ['schemaVersion', 'kind'],
   additionalProperties: false,
   properties: {
-    schemaVersion: { const: DEFINITION_SCHEMA_VERSION },
+    schemaVersion: { enum: [1, DEFINITION_SCHEMA_VERSION] },
     kind: { enum: ['automation', 'case', 'state_model'] },
     name: { type: 'string', maxLength: 200 },
     description: { type: 'string', maxLength: 4000 },
@@ -179,6 +204,10 @@ export const definitionSchema: JsonSchema = {
       type: 'string',
       pattern: '^P(?!$)(\\d+Y)?(\\d+M)?(\\d+W)?(\\d+B?D)?(T(?=\\d)(\\d+B?H)?(\\d+M)?(\\d+S)?)?$',
       description: 'Dauer nach ISO 8601, z. B. «PT4H», «P2D», «P3BD» (Arbeitstage) oder «PT8BH» (Arbeitsstunden)',
+    },
+    outcome: {
+      type: 'string', pattern: '^[^/~\\s](?:[^/~]{0,62}[^/~\\s])?$',
+      description: 'Ergebnis: 1–64 Zeichen ohne «/» und «~», ohne Leerzeichen am Anfang oder Ende',
     },
     uuid: { type: 'string', pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$', description: 'ID im Format UUID' },
     priority: { enum: ['low', 'normal', 'high', 'urgent'] },
@@ -313,12 +342,16 @@ export const definitionSchema: JsonSchema = {
             type: 'object', required: ['title', 'assignee'], additionalProperties: false,
             properties: {
               title: text, description: { type: 'string' }, assignee: ref('assignee'), form: { type: 'array', items: ref('fieldDef') },
-              outcomes: { type: 'array', minItems: 1, maxItems: 10, items: ref('name') }, due: ref('duration'),
+              outcomes: { type: 'array', minItems: 1, maxItems: 10, items: ref('outcome') }, due: ref('duration'),
               priority: ref('priority'), escalation: ref('escalation'),
             },
           },
+          branches: { type: 'object', propertyNames: ref('outcome'), additionalProperties: steps },
         }),
-        kindOf('approval', { approval: ref('approvalSpec') }),
+        kindOf('approval', {
+          approval: ref('approvalSpec'),
+          branches: { type: 'object', additionalProperties: false, properties: { approved: steps, rejected: steps } },
+        }),
         kindOf('subflow', {
           subflow: {
             type: 'object', required: ['workflow'], additionalProperties: false,
@@ -416,6 +449,9 @@ function* walkSteps(list: Step[] | undefined, base: string): Generator<[Step, st
     yield [step, path];
     if ('if' in step) { yield* walkSteps(step.then, `${path}/then`); yield* walkSteps(step.else, `${path}/else`); }
     if ('foreach' in step) yield* walkSteps(step.steps, `${path}/steps`);
+    if (('task' in step || 'approval' in step) && step.branches) {
+      for (const [k, list] of Object.entries(step.branches)) yield* walkSteps(list, `${path}/branches/${k}`);
+    }
     yield* walkSteps(step.onError?.steps, `${path}/onError/steps`);
   }
 }
@@ -482,6 +518,13 @@ function contentErrors(d: WorkflowDefinition, o: ValidateOptions): DefinitionErr
         if (out === 'cancelled') errors.push({ path: `${path}/task/outcomes/${i}`, message: 'Ergebnis «cancelled» ist für abgebrochene Aufgaben reserviert' });
         outcomes.add(out);
       }
+      const known = new Set(outcomesOf(step));
+      for (const k of Object.keys(step.branches ?? {})) {
+        if (!known.has(k)) errors.push({ path: `${path}/branches/${k}`, message: `Weg «${outcomeName(k)}» gehört zu keinem Ergebnis der Aufgabe` });
+      }
+    }
+    if (('task' in step || 'approval' in step) && step.branches && d.schemaVersion < 2) {
+      errors.push({ path: `${path}/branches`, message: 'Wege nach Ergebnis brauchen Fassung 2 der Definition («schemaVersion»: 2)' });
     }
   }
 
@@ -538,11 +581,64 @@ function contentErrors(d: WorkflowDefinition, o: ValidateOptions): DefinitionErr
   return errors;
 }
 
-/** Prüft eine Definition (Schema, dann Inhalt). Meldungen auf Deutsch mit Pfad. */
+/** Liste, in der ein Schritt steht, und sein Index (`/steps/1/branches/ok/0` → `/steps/1/branches/ok`, 0). */
+function place(path: string): { list: string; index: number } {
+  const i = path.lastIndexOf('/');
+  return { list: path.slice(0, i), index: Number(path.slice(i + 1)) };
+}
+
+/** Schritt, dem eine Liste gehört (`/steps/1/then` → `/steps/1`), oder `null` für die Listen der Definition. */
+function ownerOf(list: string): string | null {
+  const segs = list.split('/');
+  if (segs.at(-2) === 'branches' || (segs.at(-1) === 'steps' && segs.at(-2) === 'onError')) return segs.length > 3 ? segs.slice(0, -2).join('/') : null;
+  return segs.length > 2 ? segs.slice(0, -1).join('/') : null;
+}
+
+function listOf(d: WorkflowDefinition, list: string): Step[] {
+  let cur: unknown = d;
+  for (const seg of list.split('/').slice(1)) cur = cur && typeof cur === 'object' ? (cur as Record<string, unknown>)[seg] : undefined;
+  return Array.isArray(cur) ? (cur as Step[]) : [];
+}
+
+/** Folgt nach dem Schritt `index` der Liste `list` noch ein Schritt, in dieser oder einer umgebenden Liste? */
+function followedAfter(d: WorkflowDefinition, list: string, index: number): boolean {
+  for (let l: string | null = list, i = index; l !== null;) {
+    if (i + 1 < listOf(d, l).length) return true;
+    const owner = ownerOf(l);
+    if (owner === null) return false;
+    ({ list: l, index: i } = place(owner));
+  }
+  return false;
+}
+
+/** Hinweise, die nicht hindern (nur Automationen): leere Wege, Schritte nach «Beenden», «Wenn» ohne Schritte. */
+function contentHints(d: WorkflowDefinition): DefinitionError[] {
+  if (d.kind !== 'automation') return [];
+  const hints: DefinitionError[] = [];
+  for (const [step, path] of walkSteps(d.steps, '/steps')) {
+    const { list, index } = place(path);
+    if ('end' in step && index + 1 < listOf(d, list).length) {
+      hints.push({ path: `${list}/${index + 1}`, message: 'Wird nie ausgeführt: Der Schritt davor beendet den Lauf' });
+    }
+    if ('if' in step && !step.then.length && !step.else?.length) hints.push({ path: `${path}/then`, message: 'Auf keinem Weg geschieht etwas' });
+    if ('task' in step || 'approval' in step) {
+      const outcomes = outcomesOf(step);
+      if (outcomes.length < 2 || followedAfter(d, list, index)) continue;
+      const branches = (step.branches ?? {}) as Record<string, Step[] | undefined>;
+      for (const o of outcomes) {
+        if (!branches[o]?.length) hints.push({ path: `${path}/branches/${o}`, message: `Nach «${outcomeName(o)}» geschieht nichts` });
+      }
+    }
+  }
+  return hints;
+}
+
+/** Prüft eine Definition (Schema, dann Inhalt). Meldungen auf Deutsch mit Pfad; dazu Hinweise, die nicht hindern. */
 export function validateDefinition(input: unknown, options: ValidateOptions = {}): DefinitionResult {
   const validate = schemaValidator();
-  if (!validate(input)) return { ok: false, errors: schemaErrors(validate.errors ?? []) };
+  if (!validate(input)) return { ok: false, errors: schemaErrors(validate.errors ?? []), warnings: [] };
   const definition = input as WorkflowDefinition;
   const errors = contentErrors(definition, options);
-  return errors.length ? { ok: false, errors } : { ok: true, definition, errors: [] };
+  const warnings = contentHints(definition);
+  return errors.length ? { ok: false, errors, warnings } : { ok: true, definition, errors: [], warnings };
 }

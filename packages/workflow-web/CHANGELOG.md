@@ -10,6 +10,43 @@ folgen die Angaben für die Entwickler der App.
 
 ## [Unveröffentlicht]
 
+## [0.7.0] – 2026-11-03
+
+### Für Nutzer
+
+- Ergebnisse sind Wege: Eine Genehmigung zeigt im Ablauf die Wege «Genehmigt» und «Abgelehnt», eine Aufgabe mit zwei
+  oder mehr Ergebnissen je Ergebnis einen Weg. Ein Weg, auf dem nichts geschieht, trägt den Hinweis «Hier geschieht
+  nichts».
+- Ergebnisse einer Aufgabe stehen als Liste («Ergebnis hinzufügen», umbenennen, entfernen) statt «mit Komma
+  getrennt»; beim Umbenennen wandert der Weg mit.
+- Der Probelauf läuft im Ablauf: Jede Karte zeigt, was geschähe; nicht erreichte Schritte und Wege sind blass. Bei
+  Aufgaben und Genehmigungen wählst du an der Karte das Ergebnis, der Probelauf folgt dann diesem Weg. Die Eingabe beim
+  Start ist ein Formular statt JSON.
+- Daten erscheinen als Chips mit Bezeichnung («Schritt 2 · Begründung», «Bestellung · ID») statt `{{…}}`; einfügen mit
+  «{» oder «Daten». Die Auswahl zeigt nur Daten, die an der Stelle feststehen.
+- «Änderungen ansehen» vergleicht den Entwurf mit der aktiven Version (neu, geändert, verschoben, entfernt, Auslöser).
+  Der Aktivieren-Dialog zeigt die Änderungen, den Stand des Probelaufs und die Hinweise der Prüfung.
+- Fehler und Hinweise stehen getrennt: Fehler hindern das Aktivieren, Hinweise nicht.
+
+### Für den Betrieb
+
+- Braucht `@vollholz/workflow` 0.6.0 (Wege, Hinweise, Probelauf mit Annahmen).
+
+### Hinzugefügt
+
+- `TemplateInput` zeigt Daten als Chips (`contenteditable`, gespeichert bleibt `{{pfad}}`); `DataPicker`, `DataLabels`,
+  `describeTemplate`, `templateParts`.
+- `ContextField.chip`; `contextFields(def, meta, subjectLabel, at?)` mit Daten an einer Stelle.
+- Modul `paths.ts` (Pfade mit Wegen, Nummern «2.b1»), `changes.tsx` (`diffDefinitions`, `ChangesList`).
+- Typen: `branches`, `ValidationJson.warnings`, `DryRunStepJson` (`outcomes`, `outcome`), `DryRunBody.assume`.
+
+### Geändert
+
+- Leiste: «n Fehler» und «n Hinweise» getrennt (bisher «n Hinweise» für Fehler); Liste am Auslöser «Fehler am
+  Auslöser».
+- Der Editor hebt eine Definition beim ersten Weg nach Ergebnis auf Fassung 2.
+- `PlaceholderPicker` entfällt (ersetzt durch `DataPicker`).
+
 ## [0.6.0] – 2026-11-03
 
 ### Für Nutzer

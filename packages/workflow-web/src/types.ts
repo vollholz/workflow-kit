@@ -24,7 +24,7 @@ export interface FieldDefJson {
   description?: string;
 }
 
-// ---------------------------------------------------------------- Definition (Fassung 1)
+// ---------------------------------------------------------------- Definition (Fassung 2; Fassung 1 ohne Wege nach Ergebnis)
 
 export type ConditionOp =
   | 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'notIn' | 'contains' | 'notContains' | 'startsWith' | 'endsWith' | 'isSet' | 'isNotSet';
@@ -58,19 +58,23 @@ export interface TaskStep extends StepBase {
     title: string; description?: string; assignee: AssigneeJson; form?: FieldDefJson[]; outcomes?: string[]; due?: string; priority?: TaskPriority;
     escalation?: EscalationJson;
   };
+  /** Wege nach Ergebnis (Fassung 2): Schritte je Ergebnis, danach weiter nach der Aufgabe. */
+  branches?: Record<string, Step[]>;
 }
 export interface ApprovalStep extends StepBase {
   approval: {
     title: string; description?: string; approvers: AssigneeJson[]; mode: ApprovalMode; due?: string; priority?: TaskPriority; reasonOnReject?: boolean;
     escalation?: EscalationJson;
   };
+  /** Wege nach Ergebnis (Fassung 2). */
+  branches?: { approved?: Step[]; rejected?: Step[] };
 }
 /** Schritte späterer Stufen (Unterablauf): der Editor zeigt sie nur an. */
 export interface OtherStep extends StepBase { subflow?: unknown }
 export type Step = ActionStep | IfStep | ForeachStep | WaitStep | SetStep | EndStep | TaskStep | ApprovalStep | OtherStep;
 
 export interface AutomationDefinition {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   kind: 'automation';
   name?: string;
   description?: string;
@@ -136,7 +140,8 @@ export interface WorkflowDetail extends WorkflowSummary {
 }
 
 /** `POST /workflows/validate`. */
-export interface ValidationJson { ok: boolean; errors: DefinitionError[]; stage: DefinitionError[] }
+/** Prüfung: `errors` und `stage` hindern das Aktivieren, `warnings` sind Hinweise (ab `@vollholz/workflow` 0.6.0). */
+export interface ValidationJson { ok: boolean; errors: DefinitionError[]; stage: DefinitionError[]; warnings?: DefinitionError[] }
 
 export interface VersionJson {
   version: number; checksum: string; schemaVersion?: number; actor: ActorRefJson; activatedBy: ActorRefJson; activatedAt: string; active?: boolean;
@@ -161,10 +166,15 @@ export interface RunDetailJson extends RunJson { steps: RunStepJson[] }
 export interface RunPage { items: RunJson[]; nextCursor: string | null }
 
 /** `POST /workflows/:id/dry-run`. */
+/** Ein Schritt im Probelauf; Aufgabe und Genehmigung nennen ihre Ergebnisse und das angenommene. */
+export interface DryRunStepJson {
+  path: string; stepId: string; kind: string; label: string | null; summary: string; input?: unknown; output?: unknown; allowed?: boolean; missing?: string[];
+  error?: StepErrorJson; outcomes?: string[]; outcome?: string;
+}
 export interface DryRunJson {
   triggerMatches: boolean | null;
   result: 'completed' | 'failed' | 'cancelled' | 'limit';
-  steps: { path: string; stepId: string; kind: string; label: string | null; summary: string; input?: unknown; output?: unknown; allowed?: boolean; missing?: string[]; error?: StepErrorJson }[];
+  steps: DryRunStepJson[];
   variables: Record<string, unknown>;
 }
 

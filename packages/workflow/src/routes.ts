@@ -283,9 +283,9 @@ export function registerRoutes(app: FastifyInstance, o: RouteOptions): void {
     schema: { body: { type: 'object', required: ['definition'], properties: { definition: {} } } },
   }, async req => handle(req, true, async () => {
     const r = o.validate((req.body as { definition: unknown }).definition);
-    if (!r.ok) return { ok: false, errors: r.errors, stage: [] };
+    if (!r.ok) return { ok: false, errors: r.errors, stage: [], warnings: r.warnings };
     const stage = stageProblems(r.definition);
-    return { ok: !stage.length, errors: [], stage };
+    return { ok: !stage.length, errors: [], stage, warnings: r.warnings };
   }));
 
   // Nächste Ausführungen eines Zeitplans (Editor): Zeitzone und Sommerzeit rechnet nur der Server.
@@ -552,12 +552,16 @@ export function registerRoutes(app: FastifyInstance, o: RouteOptions): void {
         type: ['object', 'null'], additionalProperties: false,
         properties: {
           definition: { type: 'object' }, version: { type: 'integer', minimum: 1 }, subject: ref, input: { type: 'object' },
+          assume: { type: 'object', maxProperties: 200, additionalProperties: { type: 'string', minLength: 1, maxLength: 64 } },
           event: { type: 'object', required: ['type'], additionalProperties: false, properties: { type: { type: 'string', minLength: 1 }, subject: { anyOf: [ref, { type: 'null' }] }, data: { type: 'object' } } },
         },
       },
     },
   }, async req => handle(req, true, async (tx, actor, settings) => {
-    const body = (req.body ?? {}) as { definition?: unknown; version?: number; subject?: SubjectRef; input?: Record<string, unknown>; event?: { type: string; subject?: SubjectRef | null; data?: Record<string, unknown> } };
+    const body = (req.body ?? {}) as {
+      definition?: unknown; version?: number; subject?: SubjectRef; input?: Record<string, unknown>; assume?: Record<string, string>;
+      event?: { type: string; subject?: SubjectRef | null; data?: Record<string, unknown> };
+    };
     const w = await readable(tx, actor, (req.params as { id: string }).id);
     await need(tx, actor, 'workflow:manage', scopeOf(w));
     let def: WorkflowDefinition;
@@ -574,7 +578,7 @@ export function registerRoutes(app: FastifyInstance, o: RouteOptions): void {
     const event = body.event ? { type: body.event.type, subject: body.event.subject ?? subject, data: body.event.data ?? {}, actor } : null;
     const result = await engine.dryRun(tx, {
       workflowId: w.id, definition: def, actor: w.actor_id && w.actor_kind && w.state === 'active' ? { id: w.actor_id, kind: w.actor_kind } : actor,
-      scope: scopeOf(w), subject, event, input: body.input ?? null, limits: settings!.limits,
+      scope: scopeOf(w), subject, event, input: body.input ?? null, limits: settings!.limits, ...(body.assume ? { assume: body.assume } : {}),
     });
     return result;
   }));

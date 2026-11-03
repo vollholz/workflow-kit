@@ -239,7 +239,7 @@ describe('Automation in der App «shop» (PostgreSQL)', { skip }, () => {
     assert.equal(s.enabled, true);
     ok(await call('gus', 'PUT', '/v1/workflows/settings', { enabled: true }));
     const status = ok(await call('ada', 'GET', '/v1/workflows/status'));
-    assert.deepEqual([status.available, status.stage, status.version], [true, 2, '0.5.0']);
+    assert.deepEqual([status.available, status.stage, status.version], [true, 2, '0.6.0']);
     assert.ok(audit.some(e => e.action === 'workflow.settings_changed'));
   });
 
