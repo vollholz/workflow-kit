@@ -65,7 +65,7 @@ export function WorkflowList({ onOpen, scope, onCreated }: WorkflowListProps) {
               <tbody>
                 {items.map(x => (
                   <tr key={x.id}>
-                    <th scope="row"><button type="button" className="wf-link" onClick={() => onOpen(x.id)}>{x.name}</button></th>
+                    <th scope="row"><button type="button" className="wf-name" onClick={() => onOpen(x.id)}>{x.name}</button></th>
                     <td>{KIND_LABEL[x.kind] ?? x.kind}</td>
                     <td>{w.scopeLabel(x.scope)}</td>
                     <td><Badge tone={stateTone(x.state)}>{STATE_LABEL[x.state]}</Badge>{x.activeVersion ? <span className="wf-muted wf-small"> v{x.activeVersion}</span> : null}</td>

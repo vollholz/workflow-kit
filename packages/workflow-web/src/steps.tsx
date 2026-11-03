@@ -157,6 +157,7 @@ export function summary(s: Step, meta: WorkflowMetaJson | undefined, fields: Con
 export function StepSummary({ step, meta, fields, short }: { step: Step; meta: WorkflowMetaJson | undefined; fields: ContextField[]; short?: boolean }) {
   if ('task' in step) {
     const t = step.task;
+    if (short && 'actor' in t.assignee && !t.assignee.actor.id) return <>Noch niemand zuständig{t.due ? `, Frist ${describeDuration(t.due)}` : ''}</>;
     return <>{short ? 'für ' : `Aufgabe «${t.title || '…'}» für `}<AssigneeText value={t.assignee} />{t.due ? `, Frist ${describeDuration(t.due)}` : ''}</>;
   }
   if ('approval' in step) {

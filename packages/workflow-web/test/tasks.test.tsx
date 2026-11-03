@@ -160,8 +160,12 @@ it('Editor: Schritt «Aufgabe» mit Zuständiger Warteschlange, Formularfeld und
     [`PUT /v1/workflows/${WF}`]: async req => json({ ...d, revision: 2, definition: ((await req.json()) as { definition: unknown }).definition }),
   });
   renderWith(<StepListEditor workflowId={WF} validateDelayMs={0} saveDelayMs={0} />);
-  await userEvent.click(await screen.findByRole('button', { name: 'Schritt einfügen nach dem Start' }));
-  await userEvent.click(within(screen.getByRole('group', { name: 'Menschen einbeziehen' })).getByRole('button', { name: /^Aufgabe/ }));
+  await userEvent.click(await screen.findByRole('button', { name: /Ersten Schritt hinzufügen/ }));
+  await userEvent.click(within(screen.getByRole('dialog', { name: 'Wie startet der Workflow?' })).getByRole('button', { name: /^Von Hand/ }));
+  await userEvent.click(screen.getByRole('button', { name: 'Schritt einfügen nach dem Auslöser' }));
+  const sheet = screen.getByRole('dialog', { name: 'Schritt hinzufügen' });
+  await userEvent.click(within(sheet).getByRole('button', { name: /^Menschen einbeziehen/ }));
+  await userEvent.click(within(within(sheet).getByRole('group', { name: 'Menschen einbeziehen' })).getByRole('button', { name: /^Aufgabe/ }));
   const card = screen.getByRole('region', { name: /Schritt 1: Aufgabe/ });
   expect(within(card).getByLabelText('Frist')).toHaveDisplayValue('keine Frist');
   await userEvent.type(within(card).getByLabelText(/^Titel/), 'Prüfen');

@@ -10,6 +10,41 @@ folgen die Angaben für die Entwickler der App.
 
 ## [Unveröffentlicht]
 
+## [0.6.0] – 2026-11-03
+
+### Für Nutzer
+
+- Der Ablauf entsteht Schritt für Schritt: Ein neuer Workflow zeigt nur «Ersten Schritt hinzufügen». Zuerst wählst du,
+  wie er startet (wenn etwas passiert, nach Zeitplan, von Hand), danach fügt «+ Schritt hinzufügen» den nächsten Schritt
+  an. «Start» und «Ende» stehen nicht mehr vorab da.
+- Der Ablauf erscheint als Kette von Karten mit Verbindungslinie, mittig und mit ruhigen Abständen; «Dann» und «Sonst»
+  stehen nebeneinander. Das «+» zwischen zwei Schritten erscheint beim Darüberfahren oder mit der Tastatur.
+- Die Auswahl neuer Schritte öffnet sich als Seitenleiste. Sie zeigt zuerst nur die Gruppen; eine Gruppe öffnet ihre
+  Schritte, «Zurück» führt zu den Gruppen. Die Suche findet Schritte über alle Gruppen.
+- Der Kopf des Editors ist aufgeräumt: eine Leiste mit dem Zustand (Entwurf, Aktiv · Version n, Pausiert,
+  Archiviert), dem Speicherstand, der Zahl der Hinweise (ein Klick springt zur Stelle), «Bearbeiten | Probelauf» und
+  genau einer Hauptaktion. Seltenes – Verwerfen, Pausieren, Archivieren, Löschen, Name und Beschreibung, Läufe – steht
+  unter «Weitere Aktionen», Archivieren und Löschen abgetrennt zuletzt. Der Satz zum Auslöser, «Keine Fehler gefunden» und die erklärenden Texte entfallen; ein
+  pausierter Workflow nennt den Grund als Meldung.
+- Namen in der Liste der Workflows sind nicht mehr unterstrichen.
+- Karten nennen die Art nur, wenn der Titel etwas anderes sagt; eine Aufgabe ohne Zuständige zeigt «Noch niemand
+  zuständig».
+
+### Für den Betrieb
+
+- (keine)
+
+### Geändert
+
+- `StepListEditor`: Der Kopf zeigt mit `showTitle` nur noch Name und Beschreibung; Satz, Bereich und Akteur sowie die
+  Knöpfe «Name und Beschreibung …» und «Läufe ansehen» entfallen dort. Beide Aktionen stehen im Menü «Weitere
+  Aktionen»; `onShowRuns` und `onOpenSettings` wirken wie bisher.
+- Ein Workflow ohne Schritte mit dem Auslöser von Hand (der Standard eines neuen Entwurfs) gilt als «noch ohne
+  Auslöser»: Der Ablauf zeigt «Ersten Schritt hinzufügen» und fragt zuerst nach dem Auslöser.
+- Klassen: `wf-life`, `wf-editor-sentence`, `wf-editor-tools` und `wf-validation` entfallen; neu sind `wf-bar`,
+  `wf-menu`, `wf-sheet`, `wf-card`, `wf-flow-*` und `wf-name` (Name in `WorkflowList`, statt `wf-link`). Apps mit
+  eigenen Regeln für die alten Klassen passen sie an.
+
 ## [0.5.0] – 2026-11-03
 
 ### Für Nutzer
