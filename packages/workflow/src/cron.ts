@@ -11,8 +11,9 @@
  * - Eine doppelte Ortszeit (Umstellung zurück) läuft einmal, beim ersten Mal; nur wenn die Stunde `*` ist, laufen die
  *   Minuten der wiederholten Stunde nochmals (wie cronie bei Platzhaltern).
  *
- * Dauern: `P1Y2M3W4DT5H6M7S`, dazu Arbeitstage `nBD` (Montag–Freitag in UTC; Feiertage und Kalender folgen mit den
- * Fristen in Stufe 2). Fehler werfen `CronError` mit deutscher Meldung.
+ * Dauern: `P1Y2M3W4DT5H6M7S`, dazu Arbeitstage `nBD` und Arbeitsstunden `TnBH`. `addDuration` rechnet Arbeitstage als
+ * Montag–Freitag in UTC und kennt keine Arbeitsstunden; mit Arbeitszeiten und Feiertagen rechnet `calendar.ts`
+ * (`addWorkingTime`). Fehler werfen `CronError` mit deutscher Meldung.
  */
 
 export class CronError extends Error {
@@ -108,9 +109,11 @@ export function isValidTimeZone(tz: string): boolean {
   try { formatter(tz); return true; } catch { return false; }
 }
 
-interface Local { y: number; mo: number; d: number; h: number; mi: number }
+/** Ortszeit (ohne Sekunden). */
+export interface Local { y: number; mo: number; d: number; h: number; mi: number }
 
-function localOf(t: number, tz: string): Local {
+/** Ortszeit eines Zeitpunkts in der Zeitzone (intern, auch für `calendar.ts`). */
+export function localOf(t: number, tz: string): Local {
   const p: Record<string, number> = {};
   for (const part of formatter(tz).formatToParts(new Date(t))) if (part.type !== 'literal') p[part.type] = Number(part.value);
   return { y: p.year!, mo: p.month!, d: p.day!, h: p.hour!, mi: p.minute! };
@@ -124,7 +127,7 @@ function offsetAt(t: number, tz: string): number {
 }
 
 /** Zeitpunkte (UTC, ms) einer Ortszeit: einer, zwei (doppelt) oder bei einer Lücke der um die Lücke verschobene. */
-function instantsOf(l: Local, tz: string): { times: number[]; gap: boolean } {
+export function instantsOf(l: Local, tz: string): { times: number[]; gap: boolean } {
   const guess = Date.UTC(l.y, l.mo - 1, l.d, l.h, l.mi);
   const offsets = new Set([offsetAt(guess - 86_400_000, tz), offsetAt(guess, tz), offsetAt(guess + 86_400_000, tz)]);
   const times: number[] = [];
@@ -174,26 +177,42 @@ export function nextCronTime(schedule: CronSchedule | string, timeZone: string, 
 // ---------------------------------------------------------------------------------------------------------------
 // Dauern
 
-export interface DurationParts { years: number; months: number; weeks: number; days: number; businessDays: number; hours: number; minutes: number; seconds: number }
+export interface DurationParts {
+  years: number; months: number; weeks: number; days: number; businessDays: number; hours: number; businessHours: number; minutes: number; seconds: number;
+}
 
-const DURATION = /^P(?!$)(\d+Y)?(\d+M)?(\d+W)?(\d+B?D)?(T(?=\d)(\d+H)?(\d+M)?(\d+S)?)?$/;
+const DURATION = /^P(?!$)(\d+Y)?(\d+M)?(\d+W)?(\d+B?D)?(T(?=\d)(\d+B?H)?(\d+M)?(\d+S)?)?$/;
 
-/** Dauer nach ISO 8601 (mit Arbeitstagen `BD`) lesen. */
+/** Dauer nach ISO 8601 (mit Arbeitstagen `BD` und Arbeitsstunden `BH`) lesen. */
 export function parseDuration(text: string): DurationParts {
   const m = DURATION.exec(text);
-  if (!m) throw new CronError(`Ungültige Dauer «${text}» (z. B. «PT4H», «P2D», «P3BD»)`);
+  if (!m) throw new CronError(`Ungültige Dauer «${text}» (z. B. «PT4H», «P2D», «P3BD», «PT8BH»)`);
   const n = (v: string | undefined) => (v ? Number.parseInt(v, 10) : 0);
   const dayPart = m[4] ?? '';
+  const hourPart = m[6] ?? '';
   return {
     years: n(m[1]), months: n(m[2]), weeks: n(m[3]),
     days: dayPart.includes('B') ? 0 : n(dayPart), businessDays: dayPart.includes('B') ? n(dayPart) : 0,
-    hours: n(m[6]), minutes: n(m[7]), seconds: n(m[8]),
+    hours: hourPart.includes('B') ? 0 : n(hourPart), businessHours: hourPart.includes('B') ? n(hourPart) : 0,
+    minutes: n(m[7]), seconds: n(m[8]),
   };
 }
 
-/** Dauer zu einem Zeitpunkt addieren (Kalenderteile in UTC, Arbeitstage Montag–Freitag). */
+/** Enthält die Dauer Arbeitszeit (`BD` oder `BH`)? */
+export function isBusinessDuration(text: string): boolean {
+  const p = parseDuration(text);
+  return p.businessDays > 0 || p.businessHours > 0;
+}
+
+/** Dauer zu einem Zeitpunkt addieren (Kalenderteile in UTC, Arbeitstage Montag–Freitag; Arbeitsstunden nur mit Kalender). */
 export function addDuration(from: Date, text: string): Date {
   const p = parseDuration(text);
+  if (p.businessHours) throw new CronError(`Dauer «${text}»: Arbeitsstunden («BH») brauchen einen Kalender`);
+  return addDurationParts(from, p);
+}
+
+/** Kalenderteile und Arbeitstage (Montag–Freitag in UTC) addieren; Arbeitsstunden bleiben unbeachtet (intern). */
+export function addDurationParts(from: Date, p: DurationParts): Date {
   const d = new Date(from.getTime());
   if (p.years) d.setUTCFullYear(d.getUTCFullYear() + p.years);
   if (p.months) d.setUTCMonth(d.getUTCMonth() + p.months);
