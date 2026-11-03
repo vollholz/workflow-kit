@@ -1,7 +1,7 @@
 /** Provider (Pflichtangaben, eigener QueryClient, ersetzbare Bausteine) und Bausteine späterer Stufen. */
 import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, test, vi } from 'vitest';
-import { CaseView, MyWork, QueueView, useWorkflow, WorkflowProvider, WorkflowList, type ButtonProps, type WorkflowApi } from '../src/index.ts';
+import { CaseView, MyWork, useWorkflow, WorkflowProvider, WorkflowList, type ButtonProps, type WorkflowApi } from '../src/index.ts';
 import { json, ME, mockFetch, STATUS, summary } from './utils.tsx';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -11,17 +11,15 @@ function Probe() {
   return <p>{`${w.me?.id} ${w.can('workflow:run') ? 'darf' : 'darf nicht'} ${w.subjects.order?.label} ${w.prefix}`}</p>;
 }
 
-test('Provider gibt Konfiguration weiter; Bausteine späterer Stufen zeigen «noch nicht verfügbar»', () => {
+test('Provider gibt Konfiguration weiter; Fall (Stufe 3) zeigt «noch nicht verfügbar»', () => {
   render(
     <WorkflowProvider api={{}} me={ME} can={p => p === 'workflow:run'} subjects={{ order: { label: 'Bestellung' } }}>
       <Probe />
-      <MyWork />
-      <QueueView queueId="q1" />
       <CaseView caseId="c1" />
     </WorkflowProvider>,
   );
   expect(screen.getByText('anna darf Bestellung /v1')).toBeInTheDocument();
-  expect(screen.getAllByText('noch nicht verfügbar')).toHaveLength(3);
+  expect(screen.getAllByText('noch nicht verfügbar')).toHaveLength(1);
 });
 
 test('Pflichtangaben: ohne Provider, ohne api, can oder me ein verständlicher Fehler', () => {

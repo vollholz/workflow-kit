@@ -23,8 +23,8 @@
  *   Lauf auf `waiting` ohne `wake_at` und ohne Job; `resumeAfterTask` setzt ihn beim Erledigen fort. Jobs für einen so
  *   wartenden Lauf werden ignoriert. Endet ein Lauf, bricht `finish` seine offenen Aufgaben ab.
  * - Warten mit Arbeitszeit (`P2BD`, `PT4BH`) rechnet nach dem Standardkalender des Mandanten (`calendar.ts`).
- * - Der Mandant wird je `Tx`-Objekt zwischengespeichert: Die App gibt je Transaktion ein eigenes `Tx` (kein wiederverwendetes
- *   Verbindungsobjekt eines Pools).
+ * - Der Mandant wird je `Tx` zwischengespeichert: Die App gibt je Transaktion ein eigenes `Tx` (keine wiederverwendete
+ *   Verbindung eines Pools).
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { Ajv, type ValidateFunction } from 'ajv';

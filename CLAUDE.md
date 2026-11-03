@@ -11,7 +11,9 @@ Zustandsmodelle, Warteschlangen):
   Automationen, Migrationen (PostgreSQL, RLS), Job-Handler, Fastify-5-Plugin mit REST-Routen.
 - `packages/workflow-web` → `@vollholz/workflow-web`: React-19-Provider, Daten-Hooks (TanStack Query) und Bausteine.
 
-Stand: **Stufe 1** (Automation) im Backend (`@vollholz/workflow` 0.2.0): Engine, Migration `workflow_001_core.sql`,
+Stand: **Stufe 2** (Aufgaben und Warteschlangen, 0.3.0: `tasks.ts`, `task-routes.ts`, `calendar.ts`, `forms.ts`,
+Migration `workflow_002_tasks.sql`, Job `workflow.sla`; Oberfläche `tasks.tsx`, `queues.tsx`, `calendars.tsx`,
+`assignee.tsx`) auf **Stufe 1** (Automation) im Backend (`@vollholz/workflow` 0.2.0): Engine, Migration `workflow_001_core.sql`,
 Jobs `workflow.step`/`workflow.start`, `tick`, Routen (mit `GET /workflows/meta` für den Editor). `workflow-web` 0.2.0
 setzt die Oberfläche der Stufe 1 um (Liste, Editor, Protokoll, Einstellungen, Leiste am Bezug);
 `checkTransition` erlaubt jeden Wechsel (Stufe 4). Konzept: «Workflows als Baukasten» (Nr. 118) im Repository der ersten App

@@ -8,7 +8,7 @@
  * weiterreichen, damit Beschriftungen und Fokus stimmen.
  */
 import { useEffect, useId, useRef, type ComponentPropsWithRef, type ComponentType, type ReactNode } from 'react';
-import type { RunState, WorkflowKind, WorkflowState } from './types.ts';
+import type { ApprovalMode, QueueAssignment, RunState, TaskPriority, TaskSort, TaskState, WorkflowKind, WorkflowState } from './types.ts';
 
 export type ButtonProps = ComponentPropsWithRef<'button'> & {
   variant?: 'default' | 'primary' | 'danger' | 'ghost';
@@ -137,7 +137,19 @@ export const STEP_STATE_LABEL: Record<string, string> = {
 export const PERMISSION_LABEL: Record<string, string> = {
   'workflow:read': 'Workflows sehen', 'workflow:manage': 'Workflows bearbeiten', 'workflow:activate': 'Workflows aktivieren',
   'workflow:run': 'Workflows von Hand starten', 'workflow:operate': 'Vorfälle bearbeiten', 'workflow:admin': 'Workflows einrichten',
+  'task:work': 'Aufgaben erledigen', 'task:assign': 'Aufgaben zuweisen', 'queue:manage': 'Warteschlangen verwalten',
 };
+
+export const TASK_STATE_LABEL: Record<TaskState, string> = { open: 'Offen', in_progress: 'In Arbeit', done: 'Erledigt', cancelled: 'Abgebrochen' };
+export const PRIORITY_LABEL: Record<TaskPriority, string> = { low: 'Niedrig', normal: 'Normal', high: 'Hoch', urgent: 'Dringend' };
+export const MODE_LABEL: Record<ApprovalMode, string> = { first: 'Erste Antwort entscheidet', all: 'Alle müssen zustimmen', majority: 'Mehrheit entscheidet', sequential: 'Nacheinander' };
+export const ASSIGNMENT_LABEL: Record<QueueAssignment, string> = { pull: 'Selbst nehmen', round_robin: 'Reihum zuweisen', least_load: 'An die Person mit den wenigsten offenen Aufgaben' };
+export const SORT_LABEL: Record<TaskSort, string> = { urgency: 'Dringlichkeit', due: 'Frist', age: 'Alter' };
+/** Bezeichnung eines Ergebnisses (feste Ergebnisse übersetzt, eigene unverändert). */
+export const outcomeLabel = (o: string | null | undefined) =>
+  (o ? ({ approved: 'Genehmigt', rejected: 'Abgelehnt', cancelled: 'Abgebrochen', done: 'Erledigt' } as Record<string, string>)[o] ?? o : '');
+export const taskTone = (s: TaskState) => (s === 'done' ? 'ok' : s === 'cancelled' ? 'muted' : s === 'in_progress' ? 'accent' : 'warn');
+export const priorityTone = (p: TaskPriority) => (p === 'urgent' ? 'bad' : p === 'high' ? 'warn' : 'muted');
 
 export function Badge({ tone, children }: { tone: 'ok' | 'bad' | 'warn' | 'muted' | 'accent'; children: ReactNode }) {
   return <span className={`wf-badge ${tone}`}>{children}</span>;
@@ -169,6 +181,15 @@ export function fmtElapsed(from: string | null | undefined, to: string | null | 
   if (ms < 60_000) return `${new Intl.NumberFormat('de-CH', { maximumFractionDigits: 1 }).format(ms / 1000)} s`;
   if (ms < 3_600_000) return `${Math.round(ms / 60_000)} min`;
   return `${new Intl.NumberFormat('de-CH', { maximumFractionDigits: 1 }).format(ms / 3_600_000)} h`;
+}
+
+/** Frist relativ zu jetzt, z. B. «fällig in 3 h», «überfällig seit 2 Tagen». */
+export function fmtDue(due: string | null | undefined, now = Date.now()): { text: string; overdue: boolean; soon: boolean } {
+  if (!due) return { text: 'ohne Frist', overdue: false, soon: false };
+  const ms = new Date(due).getTime() - now;
+  const abs = Math.abs(ms);
+  const span = abs < 3_600_000 ? `${Math.max(1, Math.round(abs / 60_000))} min` : abs < 2 * 86_400_000 ? `${Math.round(abs / 3_600_000)} h` : `${Math.round(abs / 86_400_000)} Tagen`;
+  return ms < 0 ? { text: `überfällig seit ${span}`, overdue: true, soon: false } : { text: `fällig in ${span}`, overdue: false, soon: ms < 4 * 3_600_000 };
 }
 
 /** JSON lesbar (Protokoll, Probelauf). */

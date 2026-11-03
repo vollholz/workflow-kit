@@ -1,9 +1,10 @@
 # @vollholz/workflow-web
 
-Oberfläche zu `@vollholz/workflow` (React 19, TanStack Query 5). Stand **Stufe 1** (Automation): Liste der Workflows,
-Editor als Schrittliste mit Live-Prüfung und Probelauf, Protokoll mit Vorfällen, Einstellungen des Mandanten, Leiste am
-Bezug. Aufgaben, Warteschlangen und Fälle (`MyWork`, `QueueView`, `CaseView`) zeigen bis zu ihrer Stufe «noch nicht
-verfügbar».
+Oberfläche zu `@vollholz/workflow` (React 19, TanStack Query 5). Stand **Stufe 2**: Liste der Workflows,
+Editor als Schrittliste mit Live-Prüfung und Probelauf (auch Aufgabe und Genehmigung), Protokoll mit Vorfällen,
+Einstellungen des Mandanten, Leiste am Bezug mit offenen Aufgaben; «Meine Arbeit» mit Aufgaben-Detail, Genehmigen und
+Ablehnen, Warteschlangen (Liste, Ansicht, Editor), Kalender (Liste, Editor) und Zähler für die Navigation. Fälle
+(`CaseView`) zeigen bis Stufe 3 «noch nicht verfügbar». Braucht `@vollholz/workflow` 0.3.0.
 
 ## Einbinden
 
@@ -23,7 +24,10 @@ import { RunLog, SettingsPanel, StepListEditor, SubjectWorkflowBar, WorkflowList
   <StepListEditor workflowId={id} onShowRuns={id => navigate(`/workflows/${id}/runs`)} onDeleted={() => navigate('/workflows')} />
   <RunLog workflowId={id} onOpenWorkflow={id => navigate(`/workflows/${id}`)} />
   <SettingsPanel />
-  <SubjectWorkflowBar subject={{ type: 'order', id }} onOpenRun={runId => navigate(`/runs/${runId}`)} />
+  <SubjectWorkflowBar subject={{ type: 'order', id }} onOpenRun={runId => navigate(`/runs/${runId}`)} onOpenTask={t => navigate(`/work?task=${t}`)} />
+  <MyWork taskId={taskId} onOpenTask={t => navigate(t ? `/work?task=${t}` : '/work')} onOpenRun={runId => navigate(`/runs/${runId}`)} />
+  <QueueList onOpen={q => navigate(`/queues/${q}`)} onEdit={q => navigate(`/queues/${q ?? 'neu'}/edit`)} />
+  <QueueView queueId={queueId} />   <QueueEditor queueId={queueId} />   <CalendarList onEdit={…} />   <CalendarEditor calendarId={…} />
 </WorkflowProvider>
 ```
 
@@ -40,7 +44,7 @@ der Provider einen eigenen an (oder nimmt `queryClient`).
 | `prefix` | | Präfix der Routen wie im Backend (Standard `/v1`) |
 | `subjects` | | je Bezugstyp `label`, `search(q)` (Probelauf), `href(id)` oder `onOpen(id)` |
 | `fields` | | Feldarten der App für Formulare (`{ label, Input }`) |
-| `actors` | | `label(actor)` für Namen; `clients()` für die Wahl eines Maschinen-Clients beim Aktivieren (nur mit `canActAs` im Backend) |
+| `actors` | | `label(actor)` für Namen; `clients()` für die Wahl eines Maschinen-Clients beim Aktivieren (nur mit `canActAs` im Backend); `search(q)` für Personen beim Weitergeben einer Aufgabe (sonst Mitglieder der Warteschlange oder ID) |
 | `scopeLabel` | | Bezeichnung eines Bereichs |
 | `components` | | eigene `Button`, `Input`, `Select`, `Textarea`, `Dialog`, `Loading`, `ErrorBox`, `Empty` (müssen `id`, `aria-*`, `ref`, `disabled` weiterreichen) |
 | `queryClient` | | eigener QueryClient |
@@ -53,13 +57,20 @@ der Provider einen eigenen an (oder nimmt `queryClient`).
 | `StepListEditor` | Kopf (Name, Zustand, Entwurf ↔ aktive Version, Speichern mit `If-Match` und Konfliktdialog, «Aktivieren …» mit Zusammenfassung und Akteur, Pausieren, Archivieren, Löschen eines Entwurfs); Auslöser (Ereignis mit Filter in Klartext, Zeitplan mit Beschreibung, von Hand mit Formular); Schritte als Karten (Aktion mit Formular aus dem Eingabe-Schema, Wenn/Sonst, Für jedes, Warten, Werte setzen, Beenden), verschachtelt, mit Knöpfen verschieben; Platzhalter-Auswahl mit Bezeichnungen; Meldungen der Prüfung am Schritt; Probelauf mit Bezug oder Ereignis |
 | `RunLog` | Läufe mit Filter (Workflow, Bezug, Zustand) und «Weitere laden»; Lauf mit Schritten, Ein-/Ausgaben, Fehlern, Zeiten; «Nochmals versuchen», «Schritt überspringen», «Lauf abbrechen» (`workflow:operate`) |
 | `SettingsPanel`, `StatusBanner` | Opt-in des Mandanten und Grenzen (`workflow:admin`), Zähler des Tages; Hinweis, wenn das Modul aus ist |
-| `SubjectWorkflowBar` | Knöpfe der aktiven Workflows mit manuellem Auslöser (mit Formular) und letzte Läufe am Bezug; `filter(workflow)` grenzt die Knöpfe ein |
+| `SubjectWorkflowBar` | Knöpfe der aktiven Workflows mit manuellem Auslöser (mit Formular), offene Aufgaben (`onOpenTask`) und letzte Läufe am Bezug; `filter(workflow)` grenzt die Knöpfe ein |
+| `MyWork` | Reiter «Mir», «Mein Team», «Alle» mit Zählern offen/überfällig, Filter Zustand, Sortierung, nur überfällige; Tabelle mit Frist-Anzeige und Priorität; Massenaktionen (zuweisen, abbrechen) mit `task:assign`; daneben `TaskDetail`. Props `filter`, `queueId`, `taskId`/`onOpenTask` (gesteuert), `onOpenRun`, `title` |
+| `TaskDetail` | Aufgabe mit Bezug, Frist, Ergebnis; Nehmen, Zurücklegen, Weitergeben (Mitglieder der Warteschlange mit offener Last, mit Recht auch andere Personen und Warteschlangen), Abbrechen; Formular und Ergebnis-Knöpfe; Genehmigung mit Stimmen, Genehmigen/Ablehnen mit Begründung. Welche Knöpfe erscheinen, sagt der Server (`actions`) |
+| `QueueList`, `QueueView`, `QueueEditor` | Warteschlangen mit Zählern; Ansicht mit Kennzahlen und Aufgaben; Editor mit Team (Auswahl über `host.teams` der App, sonst Typ und ID), Zuweisung, Sortierung, Kalender, Frist, Eskalation (`queue:manage`) |
+| `CalendarList`, `CalendarEditor` | Kalender mit Zeitzone, Arbeitszeiten je Wochentag («08:00-12:00, 13:00-17:00»), Feiertagen, Standard und Vorschau einer Frist (`queue:manage`) |
 
 Daten-Hooks für eigene Ansichten: `useWorkflowStatus`, `useWorkflowMeta`, `useWorkflowSettings`,
 `useSaveWorkflowSettings`, `useWorkflows`, `useWorkflowDetail`, `useCreateWorkflow`, `useSaveWorkflow`,
 `useDeleteWorkflow`, `useValidateDefinition`, `useWorkflowLifecycle` (`activate`, `pause`, `archive`),
 `useWorkflowVersions`, `useWorkflowVersion`, `useStartRun`, `useDryRun`, `useRuns` (Cursor), `useRun`,
-`useIncidentAction`; Schlüssel `wfKeys`, Anfrage `wfRequest`, Fehler `WorkflowApiError` (`conflict`,
+`useIncidentAction`; Stufe 2: `useTasks`, `useTask`, `useTaskAction`, `useBulkTasks`, `useTaskCounts` (Zähler für
+die Navigation der App: `{ mine: { open, overdue }, team: { open, overdue, unassigned } }`, fragt erst bei verfügbarem
+Modul, Standard alle 60 s), `useQueues`, `useQueue`, `useQueueMembers`, `useSaveQueue`, `useDeleteQueue`, `useTeams`,
+`useCalendars`, `useCalendar`, `useSaveCalendar`, `useDeleteCalendar`, `useCalendarPreview`; Schlüssel `wfKeys`, Anfrage `wfRequest`, Fehler `WorkflowApiError` (`conflict`,
 `moduleDisabled`). Typen der Antworten (`WorkflowSummary`, `WorkflowDetail`, `RunJson` …) beschreiben das JSON der
 Routen; das Paket importiert nichts aus dem Backend.
 

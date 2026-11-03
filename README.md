@@ -8,9 +8,9 @@ einbindet; ohne Baukasten läuft sie unverändert weiter.
 | Paket | Inhalt |
 |---|---|
 | [`@vollholz/workflow`](packages/workflow) | Ports, Definition (JSON-Schema, Prüfung), Ausdrücke ohne Skripte, Engine für Automationen, Migrationen (PostgreSQL, RLS), Job-Handler, Fastify-Plugin |
-| [`@vollholz/workflow-web`](packages/workflow-web) | React-Provider, Daten-Hooks und Bausteine (`WorkflowList`, `StepListEditor`, `RunLog`, `SettingsPanel`, `SubjectWorkflowBar`; später `MyWork`, `QueueView`, `CaseView`) |
+| [`@vollholz/workflow-web`](packages/workflow-web) | React-Provider, Daten-Hooks und Bausteine (`WorkflowList`, `StepListEditor`, `RunLog`, `SettingsPanel`, `SubjectWorkflowBar`, `MyWork`, `TaskDetail`, `QueueList`, `QueueView`, `QueueEditor`, `CalendarEditor`; später `CaseView`) |
 
-## Stand: Stufe 1 (Automation, Backend)
+## Stand: Stufe 2 (Aufgaben und Warteschlangen)
 
 `@vollholz/workflow` 0.2.0 führt Automationen aus: Auslöser Ereignis (`dispatch` im Schreibpfad der App), Zeitplan
 (`tick`, Cron mit Zeitzone) und manuell; Schritte Aktion, Wenn/Sonst, Für jedes, Warten, Variablen, Ende; ein Schritt je
@@ -20,6 +20,11 @@ Entwürfe, Versionen, Läufe und Vorfälle, dazu `GET /workflows/meta` für den 
 jeden Wechsel. `@vollholz/workflow-web` 0.2.0 bringt die Oberfläche dazu: Liste, Editor als Schrittliste mit Live-Prüfung
 und Probelauf, Protokoll mit Vorfällen, Einstellungen, Leiste am Bezug. Danach folgen Aufgaben und Warteschlangen (2),
 Fälle (3), Zustandsmodelle (4).
+
+Stufe 2 (`@vollholz/workflow` und `-web` 0.3.0): Schritte Aufgabe und Genehmigung (erste Antwort, alle, Mehrheit,
+nacheinander), Formulare serverseitig geprüft, Warteschlangen mit Nehmen, Round Robin und geringster Last, Fristen in
+Arbeitszeit nach Kalender mit Feiertagen, Verzug mit Eskalation, «Meine Arbeit», Zähler für die Navigation
+(Migration `workflow_002_tasks`, Job `workflow.sla`, optionaler Host-Port `teams`).
 
 ## App-agnostisch
 

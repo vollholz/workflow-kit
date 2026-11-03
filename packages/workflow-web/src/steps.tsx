@@ -8,14 +8,17 @@
  * - Jeder Schritt bekommt eine eindeutige ID (`s1`, `s2` …); Verweise `steps.<id>` bleiben beim Verschieben gültig.
  * - Meldungen der Prüfung (`POST /workflows/validate`) stehen an der Karte, zu der ihr Pfad gehört; Meldungen
  *   verschachtelter Schritte an deren Karte.
- * - Schritte späterer Stufen (Aufgabe, Genehmigung, Unterablauf) zeigt die Karte nur an.
+ * - Aufgabe und Genehmigung (Stufe 2) mit Titel, Zuständigen, Formular, Ergebnissen, Frist und Priorität bzw.
+ *   Genehmigenden und Art; Unterabläufe (spätere Stufe) zeigt die Karte nur an.
  */
 import { createContext, useContext, useEffect, useId, useRef, useState } from 'react';
+import { AssigneeInput, describeAssignee } from './assignee.tsx';
 import { ConditionBuilder, describeCondition } from './conditions.tsx';
 import { SchemaForm } from './forms.tsx';
 import { TemplateInput, type ContextField } from './placeholders.tsx';
 import { useWorkflow } from './provider.tsx';
-import type { DefinitionError, OnError, Step, WorkflowMetaJson } from './types.ts';
+import type { ApprovalMode, ApprovalStep, DefinitionError, FieldDefJson, OnError, Step, TaskPriority, TaskStep, WorkflowMetaJson } from './types.ts';
+import { MODE_LABEL, PRIORITY_LABEL } from './ui.tsx';
 
 export interface EditorContext {
   meta: WorkflowMetaJson | undefined;
@@ -31,12 +34,12 @@ const useEditor = () => {
   return c;
 };
 
-export type StepKindName = 'action' | 'if' | 'foreach' | 'wait' | 'set' | 'end';
+export type StepKindName = 'action' | 'if' | 'foreach' | 'wait' | 'set' | 'end' | 'task' | 'approval';
 export const STEP_KIND_LABEL: Record<string, string> = {
   action: 'Aktion', if: 'Wenn / Sonst', foreach: 'Für jedes', wait: 'Warten', set: 'Werte setzen', end: 'Beenden',
   task: 'Aufgabe', approval: 'Genehmigung', subflow: 'Unterablauf',
 };
-const ADDABLE: StepKindName[] = ['action', 'if', 'foreach', 'wait', 'set', 'end'];
+const ADDABLE: StepKindName[] = ['action', 'if', 'foreach', 'wait', 'task', 'approval', 'set', 'end'];
 
 export const kindOf = (s: Step): string => (['action', 'if', 'foreach', 'wait', 'set', 'end', 'task', 'approval', 'subflow'] as const).find(k => k in s) ?? 'unbekannt';
 
@@ -48,6 +51,8 @@ export function newStep(kind: StepKindName, id: string): Step {
     case 'wait': return { id, wait: { duration: 'PT1H' } };
     case 'set': return { id, set: { wert: '' } };
     case 'end': return { id, end: { result: 'completed' } };
+    case 'task': return { id, task: { title: '', assignee: { actor: { id: '', kind: 'person' } } } };
+    case 'approval': return { id, approval: { title: '', approvers: [{ actor: { id: '', kind: 'person' } }], mode: 'first' } };
   }
 }
 
@@ -56,6 +61,7 @@ export function newStep(kind: StepKindName, id: string): Step {
 const UNITS = [
   { key: 'M', label: 'Minuten', make: (n: number) => `PT${n}M`, re: /^PT(\d+)M$/ },
   { key: 'H', label: 'Stunden', make: (n: number) => `PT${n}H`, re: /^PT(\d+)H$/ },
+  { key: 'BH', label: 'Arbeitsstunden', make: (n: number) => `PT${n}BH`, re: /^PT(\d+)BH$/ },
   { key: 'D', label: 'Tage', make: (n: number) => `P${n}D`, re: /^P(\d+)D$/ },
   { key: 'BD', label: 'Arbeitstage', make: (n: number) => `P${n}BD`, re: /^P(\d+)BD$/ },
   { key: 'W', label: 'Wochen', make: (n: number) => `P${n}W`, re: /^P(\d+)W$/ },
@@ -70,7 +76,8 @@ export function describeDuration(iso: string | undefined): string {
   return iso;
 }
 
-function DurationInput({ value, onChange, label }: { value: string; onChange: (v: string) => void; label: string }) {
+/** Dauer mit Anzahl und Zeitraum (auch Arbeitstage und -stunden); andere Schreibweisen als ISO-Text. */
+export function DurationInput({ value, onChange, label }: { value: string; onChange: (v: string) => void; label: string }) {
   const { ui } = useWorkflow();
   const id = useId();
   const unit = UNITS.find(u => u.re.test(value));
@@ -114,6 +121,8 @@ export function summary(s: Step, meta: WorkflowMetaJson | undefined, fields: Con
   if ('wait' in s) return s.wait.duration ? `Warten: ${describeDuration(s.wait.duration)}` : s.wait.until ? `Warten bis ${s.wait.until}` : 'Warten auf ein Ereignis';
   if ('set' in s) return `Setzt ${Object.keys(s.set).join(', ') || '…'}`;
   if ('end' in s) return `Lauf beenden: ${END_LABEL[s.end.result]}`;
+  if ('task' in s) return `Aufgabe «${s.task.title || '…'}» für ${describeAssignee(s.task.assignee)}${s.task.due ? `, Frist ${describeDuration(s.task.due)}` : ''}`;
+  if ('approval' in s) return `Genehmigung «${s.approval.title || '…'}» bei ${s.approval.approvers.map(a => describeAssignee(a)).join(', ')}`;
   return `${STEP_KIND_LABEL[kindOf(s)] ?? 'Schritt'} (folgt in einer späteren Stufe)`;
 }
 const END_LABEL = { completed: 'erfolgreich', cancelled: 'abgebrochen', failed: 'fehlgeschlagen' } as const;
@@ -347,6 +356,8 @@ function StepBody({ step, path, number, onChange }: { step: Step; path: string; 
     );
   }
   if ('set' in step) return <SetEditor step={step} onChange={onChange} name={name} />;
+  if ('task' in step) return <TaskEditor step={step} onChange={onChange} name={name} />;
+  if ('approval' in step) return <ApprovalEditor step={step} onChange={onChange} name={name} />;
   if ('end' in step) {
     return (
       <>
@@ -390,5 +401,123 @@ function SetEditor({ step, onChange, name }: { step: Step & { set: Record<string
         write([...entries, [`wert${n}`, '']]);
       }}>Wert hinzufügen</ui.Button>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- Aufgabe und Genehmigung (Stufe 2)
+
+const FIELD_TYPES: [string, string][] = [['text', 'Text'], ['number', 'Zahl'], ['date', 'Datum'], ['choice', 'Auswahl'], ['boolean', 'Ja/Nein'], ['actor', 'Person'], ['file', 'Datei']];
+
+function PriorityAndDue({ due, priority, onChange, name }: { due?: string; priority?: TaskPriority; onChange: (v: { due?: string; priority?: TaskPriority }) => void; name: string }) {
+  const { ui } = useWorkflow();
+  const id = useId();
+  return (
+    <div className="wf-row">
+      <div className="wf-field">
+        <label htmlFor={`${id}-d`}>Frist</label>
+        <ui.Select id={`${id}-d`} value={due ? 'yes' : ''} onChange={e => onChange({ due: e.target.value ? 'P1BD' : undefined, priority })}>
+          <option value="">keine eigene (Warteschlange)</option>
+          <option value="yes">festlegen</option>
+        </ui.Select>
+      </div>
+      {due ? <DurationInput label={`${name}: Frist`} value={due} onChange={d => onChange({ due: d, priority })} /> : null}
+      <div className="wf-field">
+        <label htmlFor={`${id}-p`}>Priorität</label>
+        <ui.Select id={`${id}-p`} value={priority ?? 'normal'} onChange={e => onChange({ due, priority: e.target.value as TaskPriority })}>
+          {(Object.keys(PRIORITY_LABEL) as TaskPriority[]).map(p => <option key={p} value={p}>{PRIORITY_LABEL[p]}</option>)}
+        </ui.Select>
+      </div>
+    </div>
+  );
+}
+
+/** Felder des Formulars einer Aufgabe. */
+function FormFieldsEditor({ fields, onChange, name }: { fields: FieldDefJson[]; onChange: (f: FieldDefJson[]) => void; name: string }) {
+  const w = useWorkflow();
+  const { ui } = w;
+  const set = (i: number, f: FieldDefJson) => onChange(fields.map((x, j) => (j === i ? f : x)));
+  const kinds = [...FIELD_TYPES, ...Object.entries(w.fields).map(([k, v]): [string, string] => [k, v.label])];
+  return (
+    <fieldset className="wf-field">
+      <legend>Formular</legend>
+      {fields.length ? null : <p className="wf-muted wf-small">Ohne Felder: nur ein Ergebnis wählen.</p>}
+      {fields.map((f, i) => (
+        <div key={i} className="wf-row wf-set-row">
+          <ui.Input aria-label={`${name}: Feld ${i + 1} Schlüssel`} placeholder="schluessel" value={f.key} onChange={e => set(i, { ...f, key: e.target.value })} />
+          <ui.Input aria-label={`${name}: Feld ${i + 1} Bezeichnung`} placeholder="Bezeichnung" value={f.label} onChange={e => set(i, { ...f, label: e.target.value })} />
+          <ui.Select aria-label={`${name}: Feld ${i + 1} Art`} value={f.type} onChange={e => set(i, { ...f, type: e.target.value })}>
+            {kinds.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </ui.Select>
+          {f.type === 'choice' ? (
+            <ui.Input aria-label={`${name}: Feld ${i + 1} Werte`} placeholder="wert=Bezeichnung, …" value={(f.options ?? []).map(o => `${o.value}=${o.label}`).join(', ')}
+              onChange={e => set(i, { ...f, options: e.target.value.split(',').map(s => s.trim()).filter(Boolean).map(s => { const [v, l] = s.split('='); return { value: v!.trim(), label: (l ?? v!).trim() }; }) })} />
+          ) : null}
+          <label className="wf-check-row"><ui.Input type="checkbox" checked={!!f.required} onChange={e => set(i, { ...f, required: e.target.checked || undefined })} /> Pflicht</label>
+          <ui.Button size="sm" variant="ghost" aria-label={`${name}: Feld ${i + 1} entfernen`} onClick={() => onChange(fields.filter((_, j) => j !== i))}>✕</ui.Button>
+        </div>
+      ))}
+      <ui.Button size="sm" onClick={() => onChange([...fields, { key: `feld${fields.length + 1}`, label: '', type: 'text' }])}>Feld hinzufügen</ui.Button>
+    </fieldset>
+  );
+}
+
+function TaskEditor({ step, onChange, name }: { step: TaskStep; onChange: (s: Step) => void; name: string }) {
+  const ed = useEditor();
+  const { ui } = useWorkflow();
+  const id = useId();
+  const t = step.task;
+  const set = (patch: Partial<TaskStep['task']>) => {
+    const next = { ...t, ...patch } as Record<string, unknown>;
+    for (const k of Object.keys(next)) if (next[k] === undefined || (Array.isArray(next[k]) && !(next[k] as unknown[]).length)) delete next[k];
+    onChange({ ...step, task: next as TaskStep['task'] });
+  };
+  return (
+    <>
+      <TemplateInput label="Titel" required value={t.title} fields={ed.fields} onChange={title => set({ title })} />
+      <TemplateInput label="Beschreibung (optional)" value={t.description ?? ''} fields={ed.fields} onChange={d => set({ description: d || undefined })} />
+      <AssigneeInput label="Zuständig" value={t.assignee} onChange={assignee => set({ assignee })} />
+      <FormFieldsEditor name={name} fields={t.form ?? []} onChange={form => set({ form })} />
+      <div className="wf-field">
+        <label htmlFor={`${id}-o`}>Ergebnisse (mit Komma getrennt)</label>
+        <ui.Input id={`${id}-o`} value={(t.outcomes ?? []).join(', ')} placeholder="done" aria-describedby={`${id}-oh`}
+          onChange={e => set({ outcomes: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })} />
+        <span id={`${id}-oh`} className="wf-hint">{`Danach als {{steps.${step.id}.outcome}} und {{steps.${step.id}.values.…}} verfügbar.`}</span>
+      </div>
+      <PriorityAndDue name={name} due={t.due} priority={t.priority} onChange={v => set(v)} />
+    </>
+  );
+}
+
+function ApprovalEditor({ step, onChange, name }: { step: ApprovalStep; onChange: (s: Step) => void; name: string }) {
+  const ed = useEditor();
+  const { ui } = useWorkflow();
+  const id = useId();
+  const a = step.approval;
+  const set = (patch: Partial<ApprovalStep['approval']>) => {
+    const next = { ...a, ...patch } as Record<string, unknown>;
+    for (const k of Object.keys(next)) if (next[k] === undefined) delete next[k];
+    onChange({ ...step, approval: next as ApprovalStep['approval'] });
+  };
+  return (
+    <>
+      <TemplateInput label="Titel" required value={a.title} fields={ed.fields} onChange={title => set({ title })} />
+      <TemplateInput label="Beschreibung (optional)" value={a.description ?? ''} fields={ed.fields} onChange={d => set({ description: d || undefined })} />
+      {a.approvers.map((x, i) => (
+        <div key={i} className="wf-row">
+          <AssigneeInput label={`Genehmigend ${i + 1}`} value={x} onChange={v => set({ approvers: a.approvers.map((y, j) => (j === i ? v : y)) })} />
+          {a.approvers.length > 1 ? <ui.Button size="sm" variant="ghost" aria-label={`${name}: Genehmigend ${i + 1} entfernen`} onClick={() => set({ approvers: a.approvers.filter((_, j) => j !== i) })}>✕</ui.Button> : null}
+        </div>
+      ))}
+      <ui.Button size="sm" onClick={() => set({ approvers: [...a.approvers, { actor: { id: '', kind: 'person' } }] })}>Genehmigende hinzufügen</ui.Button>
+      <div className="wf-field">
+        <label htmlFor={`${id}-m`}>Art</label>
+        <ui.Select id={`${id}-m`} value={a.mode} onChange={e => set({ mode: e.target.value as ApprovalMode })}>
+          {(Object.keys(MODE_LABEL) as ApprovalMode[]).map(m => <option key={m} value={m}>{MODE_LABEL[m]}</option>)}
+        </ui.Select>
+      </div>
+      <label className="wf-check-row"><ui.Input type="checkbox" checked={a.reasonOnReject !== false} onChange={e => set({ reasonOnReject: e.target.checked ? undefined : false })} /> Begründung bei Ablehnung verlangen</label>
+      <span className="wf-hint">{`Ergebnis als {{steps.${step.id}.outcome}} («approved» oder «rejected»), Begründung als {{steps.${step.id}.reason}}.`}</span>
+      <PriorityAndDue name={name} due={a.due} priority={a.priority} onChange={v => set(v)} />
+    </>
   );
 }

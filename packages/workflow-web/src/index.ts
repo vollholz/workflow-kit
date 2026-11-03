@@ -3,7 +3,9 @@
  * unter `@vollholz/workflow-web/styles.css` (kein Quellmodul importiert CSS).
  *
  * Stufe 1 (Automation): `WorkflowList`, `StepListEditor`, `RunLog`, `SettingsPanel`, `StatusBanner`,
- * `SubjectWorkflowBar`. `MyWork`, `QueueView`, `CaseView` zeigen bis zu ihrer Stufe «noch nicht verfügbar».
+ * `SubjectWorkflowBar`. Stufe 2 (Aufgaben): `MyWork`, `TaskDetail`, `QueueList`, `QueueView`, `QueueEditor`,
+ * `CalendarList`, `CalendarEditor`, Hook `useTaskCounts` für die Navigation. `CaseView` zeigt bis Stufe 3 «noch nicht
+ * verfügbar».
  */
 export {
   actorName, useWorkflow, WorkflowProvider,
@@ -18,7 +20,9 @@ export {
   useCreateWorkflow, useDeleteWorkflow, useDryRun, useIncidentAction, useRun, useRuns, useSaveWorkflow, useSaveWorkflowSettings, useStartRun,
   useValidateDefinition, useWorkflowDetail, useWorkflowLifecycle, useWorkflowMeta, useWorkflows, useWorkflowSettings, useWorkflowStatus,
   useWorkflowVersion, useWorkflowVersions, wfKeys, wfRequest,
-  type DryRunBody, type IncidentAction, type RunFilter, type WorkflowListFilter,
+  useBulkTasks, useCalendar, useCalendarPreview, useCalendars, useDeleteCalendar, useDeleteQueue, useQueue, useQueueMembers, useQueues,
+  useSaveCalendar, useSaveQueue, useTask, useTaskAction, useTaskCounts, useTasks, useTeams,
+  type DryRunBody, type IncidentAction, type RunFilter, type TaskAction, type TaskFilter, type WorkflowListFilter,
 } from './api.ts';
 export { WorkflowList, type WorkflowListProps } from './WorkflowList.tsx';
 export { StepListEditor, type StepListEditorProps } from './editor.tsx';
@@ -27,5 +31,10 @@ export { SettingsPanel, StatusBanner } from './SettingsPanel.tsx';
 export { SubjectWorkflowBar, type SubjectWorkflowBarProps } from './SubjectWorkflowBar.tsx';
 export { describeCondition } from './conditions.tsx';
 export { describeCron, describeTrigger } from './trigger.tsx';
-export { CaseView, MyWork, QueueView, type CaseViewProps, type MyWorkProps, type QueueViewProps } from './components.tsx';
+export { CaseView, type CaseViewProps } from './components.tsx';
+export { DueBadge, MyWork, TaskDetail, type MyWorkProps, type TaskDetailProps } from './tasks.tsx';
+export { QueueEditor, QueueList, QueueView, type QueueEditorProps, type QueueListProps, type QueueViewProps } from './queues.tsx';
+export { CalendarEditor, CalendarList, formatHours, parseHours, type CalendarEditorProps } from './calendars.tsx';
+export { AssigneeInput, TeamInput, describeAssignee } from './assignee.tsx';
+export { fmtDue } from './ui.tsx';
 export type * from './types.ts';
