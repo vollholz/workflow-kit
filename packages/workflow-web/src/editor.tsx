@@ -15,7 +15,7 @@ import {
   useWorkflowVersions,
 } from './api.ts';
 import { contextFields, walk } from './placeholders.tsx';
-import { actorName, useWorkflow, type WorkflowActor } from './provider.tsx';
+import { ActorName, useWorkflow, type WorkflowActor } from './provider.tsx';
 import { EditorCtx, StepList, type EditorContext } from './steps.tsx';
 import { describeCron, describeTrigger, TriggerEditor } from './trigger.tsx';
 import type { AutomationDefinition, DefinitionError, DryRunJson, Step, WorkflowDefinition, WorkflowDetail, WorkflowMetaJson } from './types.ts';
@@ -125,7 +125,7 @@ function EditorLoaded({ detail, refetch, onDeleted, onShowRuns, validateDelayMs 
               <span>{KIND_LABEL[detail.kind]}</span>
               <span className="wf-muted">{w.scopeLabel(detail.scope)}</span>
               <span className="wf-muted">{detail.activeVersion ? `Aktive Version ${detail.activeVersion}` : 'Noch nie aktiviert'} · Entwurf Stand {detail.revision}</span>
-              {detail.actor ? <span className="wf-muted">Akteur: {actorName(w, detail.actor)}</span> : null}
+              {detail.actor ? <span className="wf-muted">Akteur: <ActorName actor={detail.actor} /></span> : null}
               {dirty ? <Badge tone="warn">Ungespeichert</Badge> : null}
             </div>
             {detail.state === 'paused' && detail.pausedReason ? <p className="wf-warn" role="note">Pausiert: {detail.pausedReason}</p> : null}
@@ -256,12 +256,12 @@ function ActivateDialog({ detail, definition, meta, dirty, errors, onClose, onAc
         <legend>Akteur: in wessen Namen der Workflow handelt</legend>
         <div className="wf-check-row">
           <input type="radio" className="wf-check" id={`${id}-me`} name={`${id}-who`} checked={who === 'me'} onChange={() => setWho('me')} />
-          <label htmlFor={`${id}-me`}>Ich selbst ({actorName(w, w.me)})</label>
+          <label htmlFor={`${id}-me`}>Ich selbst (<ActorName actor={w.me} />)</label>
         </div>
         {canChoose && clients?.map(c => (
           <div key={c.id} className="wf-check-row">
             <input type="radio" className="wf-check" id={`${id}-${c.id}`} name={`${id}-who`} checked={who === c.id} onChange={() => setWho(c.id)} />
-            <label htmlFor={`${id}-${c.id}`}>{actorName(w, c)}</label>
+            <label htmlFor={`${id}-${c.id}`}><ActorName actor={c} /></label>
           </div>
         ))}
         <p className="wf-hint">Jeder Schritt prüft die Rechte dieses Akteurs. Fehlt ein Recht oder ist der Akteur nicht mehr aktiv, hält der Lauf an.</p>
@@ -285,7 +285,7 @@ function Versions({ workflowId }: { workflowId: string }) {
       <ul className="wf-plain">
         {v.data.items.map(x => (
           <li key={x.version}>
-            <b>Version {x.version}</b>{x.active ? ' · aktiv' : ''} · {fmtDateTime(x.activatedAt)} · Akteur {actorName(w, x.actor)}
+            <b>Version {x.version}</b>{x.active ? ' · aktiv' : ''} · {fmtDateTime(x.activatedAt)} · Akteur <ActorName actor={x.actor} />
           </li>
         ))}
       </ul>

@@ -215,9 +215,14 @@ export function useStartRun() {
   return useMutation({
     mutationFn: (b: { workflowId: string; subject?: WorkflowSubjectRef; input?: Record<string, unknown> }) =>
       wfRequest<RunJson>(w, 'POST', `/workflows/${enc(b.workflowId)}/runs`, { body: { subject: b.subject, input: b.input ?? {} } }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: wfKeys.allRuns }),
+    onSuccess: async () => {
+      await Promise.all([wfKeys.allRuns, wfKeys.allTasks, wfKeys.taskCounts].map(queryKey => qc.invalidateQueries({ queryKey })));
+    },
   });
 }
+
+/** Nachladen für Listen: fester Abstand, `false` oder eine Funktion, die nach jeder Antwort neu entscheidet. */
+export type RefetchInterval = number | false | (() => number | false);
 
 export interface DryRunBody {
   definition?: WorkflowDefinition;
@@ -235,10 +240,12 @@ export function useDryRun(id: string) {
 
 // ---------------------------------------------------------------- Läufe und Vorfälle
 
-export function useRuns(filter: RunFilter = {}, enabled = true) {
+export function useRuns(filter: RunFilter = {}, enabled = true, o: { refetchInterval?: RefetchInterval } = {}) {
   const w = useWorkflow();
+  const every = o.refetchInterval;
   return useInfiniteQuery({
     queryKey: wfKeys.runs(filter), enabled, initialPageParam: null as string | null,
+    refetchInterval: typeof every === 'function' ? () => every() : every,
     queryFn: ({ pageParam, signal }) => wfRequest<RunPage>(w, 'GET', `/workflow-runs${qs({ ...filter, limit: filter.limit ?? 50, cursor: pageParam })}`, { signal }),
     getNextPageParam: l => l.nextCursor ?? null,
   });
@@ -267,10 +274,12 @@ export function useIncidentAction() {
 // ---------------------------------------------------------------- Aufgaben (Stufe 2)
 
 /** Aufgaben einer Ansicht (`mine`, `team`, `all`) mit Filter und Sortierung. */
-export function useTasks(filter: TaskFilter = {}, enabled = true) {
+export function useTasks(filter: TaskFilter = {}, enabled = true, o: { refetchInterval?: RefetchInterval } = {}) {
   const w = useWorkflow();
+  const every = o.refetchInterval;
   return useQuery({
     queryKey: wfKeys.tasks(filter), enabled, placeholderData: keepPreviousData,
+    refetchInterval: typeof every === 'function' ? () => every() : every,
     queryFn: ({ signal }) => wfRequest<TaskPage>(w, 'GET', `/tasks${qs({ ...filter, overdue: filter.overdue ? 'true' : undefined })}`, { signal }),
   });
 }

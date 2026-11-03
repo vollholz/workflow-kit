@@ -183,6 +183,11 @@ export function fmtElapsed(from: string | null | undefined, to: string | null | 
   return `${new Intl.NumberFormat('de-CH', { maximumFractionDigits: 1 }).format(ms / 3_600_000)} h`;
 }
 
+/** Anzahl mit Einzahl oder Mehrzahl, z. B. `plural(1, 'Person', 'Personen')` → «1 Person». */
+export function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
 /** Frist relativ zu jetzt, z. B. «fällig in 3 h», «überfällig seit 2 Tagen». */
 export function fmtDue(due: string | null | undefined, now = Date.now()): { text: string; overdue: boolean; soon: boolean } {
   if (!due) return { text: 'ohne Frist', overdue: false, soon: false };

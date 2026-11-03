@@ -10,6 +10,46 @@ folgen die Angaben für die Entwickler der App.
 
 ## [Unveröffentlicht]
 
+## [0.3.1] – 2026-11-03
+
+### Für Nutzer
+
+- Personen erscheinen überall mit ihrem Namen statt einer langen Kennung: bei Zuständigen, Genehmigenden, Stimmen,
+  im Protokoll, in der Liste der Workflows und beim Weitergeben einer Aufgabe.
+- Bezüge erscheinen im Protokoll und bei Aufgaben mit ihrem Titel statt einer Kennung.
+- Im Editor wählst du Zuständige und Genehmigende über eine Personensuche; die Zusammenfassung eines Schritts nennt
+  Warteschlange, Team und Person mit Namen.
+- Korrekte Einzahl und Mehrzahl, z. B. «1 Person kann entscheiden», «1 Aufgabe zuweisen», «1 Tag».
+- Nach dem Start eines Workflows an einem Element erscheinen neue Aufgaben und der Lauf ohne Neuladen.
+- Kalender: Die Felder der Arbeitszeiten nennen für Bildschirmleser ihren Wochentag.
+
+### Für den Betrieb
+
+(keine) – braucht weiterhin `@vollholz/workflow` 0.3.0.
+
+### Hinzugefügt
+
+- Provider: `actors.Name?: ComponentType<{ actor: WorkflowActor }>` und `subjects.<typ>.Title?: ComponentType<{ id: string }>`
+  (beide optional; Komponenten der App, die eigene Hooks nutzen dürfen). Ohne Angabe wie bisher `actors.label` bzw.
+  der Titel aus der API, sonst Bezeichnung und ID.
+- Bausteine `ActorName` (`{ actor }`), `SubjectTitle` (`{ type, id, title? }`), `PersonInput` (Person wählen mit
+  `actors.search`, sonst ID) und `AssigneeText` (Zuständigkeit mit Namen).
+- `useRuns` und `useTasks` nehmen als dritte Angabe `{ refetchInterval }` (Zahl, `false` oder Funktion); Typ
+  `RefetchInterval`.
+
+### Geändert
+
+- Alle Anzeigen von Akteuren nutzen `ActorName`, alle Anzeigen von Bezügen `SubjectTitle` (Links bleiben Links).
+  `actorName()` bleibt für Texte (z. B. `title`, `aria-label`).
+- Editor: `AssigneeInput` wählt Personen mit `PersonInput`; Zusammenfassung von Aufgabe und Genehmigung mit Namen der
+  Warteschlange (aus `useQueues`) und des Teams (aus `useTeams`, falls die App Teams anbietet). `describeAssignee`
+  nimmt optional `teamName`.
+- Weitergeben: Personen als Optionsfelder mit `ActorName` statt Auswahlliste.
+- `useStartRun` lädt nach dem Start auch Aufgaben und Zähler neu; `SubjectWorkflowBar` lädt Läufe und Aufgaben alle
+  2 s nach, solange ein Lauf des Bezugs `running` ist (höchstens 30 s nach dem Start).
+- Texte mit Zahl in Einzahl/Mehrzahl (Aufgaben, Personen, Dauer, Zeitplan, Zähler des Tages).
+- Kalender-Editor: Wochentagsfelder mit `aria-label` «<Wochentag>: Arbeitszeiten».
+
 ## [0.3.0] – 2026-11-03
 
 ### Für Nutzer
