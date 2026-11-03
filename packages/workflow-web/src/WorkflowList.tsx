@@ -1,9 +1,9 @@
 /**
  * Liste der Workflows (Konzept Abschnitt 10): Name, Art, Bereich, Zustand, letzte Läufe (ok/Fehler), Akteur; Filter
- * nach Zustand und Name; «Neu» legt einen Entwurf an (nur mit `workflow:manage`). Leerzustände unterscheiden «noch
+ * nach Zustand und Name; «Neu» legt einen Entwurf an (nur mit `workflow:manage`; ohne Name meldet der Dialog es am Feld). Leerzustände unterscheiden «noch
  * keine Workflows» und «kein Treffer». Ist das Modul nicht verfügbar, steht der Hinweis statt der Liste.
  */
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { useCreateWorkflow, useRuns, useWorkflows, useWorkflowStatus } from './api.ts';
 import { ActorName, useWorkflow, type WorkflowScopeRef } from './provider.tsx';
 import { StatusBanner } from './SettingsPanel.tsx';
@@ -104,17 +104,22 @@ function CreateDialog({ scope, onClose, onCreated }: { scope: WorkflowScopeRef; 
   const create = useCreateWorkflow();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [missing, setMissing] = useState(false);
+  const nameRef = useRef<HTMLInputElement>(null);
   const submit = () => {
-    if (!name.trim()) return;
+    if (create.isPending) return;
+    if (!name.trim()) { setMissing(true); nameRef.current?.focus(); return; }
     create.mutate({ name: name.trim(), description: description.trim() || undefined, scope }, { onSuccess: d => onCreated(d.id) });
   };
   return (
     <ui.Dialog title="Neuer Workflow" onClose={onClose}
-      footer={<><ui.Button onClick={onClose}>Abbrechen</ui.Button><ui.Button variant="primary" disabled={!name.trim() || create.isPending} onClick={submit}>{create.isPending ? 'Wird angelegt …' : 'Entwurf anlegen'}</ui.Button></>}>
+      footer={<><ui.Button onClick={onClose}>Abbrechen</ui.Button><ui.Button variant="primary" aria-disabled={create.isPending || undefined} onClick={submit}>{create.isPending ? 'Wird angelegt …' : 'Entwurf anlegen'}</ui.Button></>}>
       <form onSubmit={e => { e.preventDefault(); submit(); }}>
         <div className="wf-field">
           <label htmlFor={`${id}-n`}>Name</label>
-          <ui.Input id={`${id}-n`} data-autofocus required value={name} onChange={e => setName(e.target.value)} />
+          <ui.Input ref={nameRef} id={`${id}-n`} data-autofocus required value={name} aria-invalid={missing || undefined} aria-describedby={missing ? `${id}-ne` : undefined}
+            onChange={e => { setName(e.target.value); setMissing(false); }} />
+          {missing ? <span id={`${id}-ne`} className="wf-field-error">Gib einen Namen ein.</span> : null}
         </div>
         <div className="wf-field">
           <label htmlFor={`${id}-d`}>Beschreibung (optional)</label>

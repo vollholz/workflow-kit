@@ -52,6 +52,8 @@ export interface TeamRef {
 /** Team mit Bezeichnung (Auswahl in der Oberfläche, Port `teams`). */
 export interface TeamOption extends TeamRef {
   label: string;
+  /** Überschrift der Gruppe in der Auswahl (z. B. «Rollen»); ohne Angabe «Teams». */
+  group?: string;
 }
 
 /** Eintrag im Audit der App. */

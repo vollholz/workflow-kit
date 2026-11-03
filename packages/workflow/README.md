@@ -157,6 +157,7 @@ Abbrechen, Massenaktionen und die Ansicht «alle»; `queue:manage` (am `tenantSc
 | `POST /workflows/validate` | angemeldet | `{ ok, errors, stage }` |
 | `POST /workflows/:id/activate` | `workflow:activate` | Version anlegen, Auslöser neu; `actor` wahlweise (W6, `canActAs`) |
 | `POST /workflows/:id/pause`, `/archive` | `workflow:activate` | Auslöser entfernen |
+| `POST /workflows/:id/resume` | `workflow:activate` | pausiert → aktiv mit derselben Version und demselben Akteur; Auslöser neu; meldet `workflow.activated` mit `resumed: true` |
 | `GET /workflows/:id/versions`, `/versions/:version` | `workflow:read` | Versionen mit Prüfsumme und Definition |
 | `POST /workflows/:id/runs` | `workflow:run` | manueller Start mit Bezug und Eingabe |
 | `POST /workflows/:id/dry-run` | `workflow:manage` | Probelauf ohne zu schreiben (Entwurf, Definition oder Version) |

@@ -21,6 +21,8 @@
   --wf-warn-soft: var(--warn-soft, #fbefd2);
   --wf-bad: var(--bad, #a93019);
   --wf-bad-soft: var(--bad-soft, #f8ddd7);
+  --wf-info: var(--info, #2f62b5);
+  --wf-info-soft: var(--info-soft, #dce7f8);
   --wf-shadow: var(--shadow, 0 12px 40px -12px rgba(20, 30, 25, .28), 0 2px 6px rgba(20, 30, 25, .08));
   --wf-mono: var(--f-mono, ui-monospace, Consolas, monospace);
   --wf-radius: var(--radius, 8px);
@@ -110,9 +112,34 @@
 .wf-table tbody th { font-weight: 500; }
 
 /* Editor */
-.wf-editor-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; padding-bottom: 12px; border-bottom: 1px solid var(--wf-line); margin-bottom: 12px; }
+.wf-editor-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
+.wf-editor-title { margin: 0 0 2px; font-size: 22px; line-height: 1.25; }
+.wf-editor-sentence { margin: 0; color: var(--wf-fg-2); font-size: 14px; }
+.wf-editor-desc { margin: 4px 0 0; color: var(--wf-fg-3); font-size: 13px; max-width: 72ch; }
+/* Statusleiste: Zustand, Hauptaktion je Zustand, Speicherstand */
+.wf-life { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 10px 12px; margin: 0 0 14px; border-radius: var(--wf-radius); background: var(--wf-surface-2); border-left: 4px solid var(--wf-line-2); }
+.wf-life.accent { background: var(--wf-accent-soft); border-left-color: var(--wf-accent); }
+.wf-life.ok { border-left-color: var(--wf-ok); }
+.wf-life.info { background: var(--wf-info-soft); border-left-color: var(--wf-info); }
+.wf-life.warn { background: var(--wf-warn-soft); border-left-color: var(--wf-warn); }
+.wf-life-text { flex: 1 1 280px; margin: 0; font-size: 14px; }
+.wf-life-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.wf-life-save { flex-basis: 100%; margin: 0; font-size: 12.5px; color: var(--wf-fg-3); }
+/* Rückgängig nach dem Entfernen */
+.wf-undo { position: sticky; bottom: 12px; z-index: 5; display: flex; align-items: center; gap: 8px; margin: 10px 0; padding: 8px 10px; border-radius: var(--wf-radius); background: var(--wf-fg); color: var(--wf-surface); box-shadow: var(--wf-shadow); }
+.wf-undo .wf-btn.ghost { color: var(--wf-surface); }
+/* Auswahl «Zuständig» */
+.wf-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 6px; background: var(--wf-surface-2); border: 1px solid var(--wf-line-2); color: var(--wf-fg); font-size: 13px; }
+.wf-combo-wrap { position: relative; }
+.wf-combo-wrap > .wf-input { width: 100%; }
+.wf-combo { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20; max-height: 300px; overflow: auto; margin: 0; padding: 4px; list-style: none; background: var(--wf-surface); border: 1px solid var(--wf-line-2); border-radius: var(--wf-radius); box-shadow: var(--wf-shadow); }
+.wf-combo ul { list-style: none; margin: 0; padding: 0; }
+.wf-combo-group { padding: 6px 8px 2px; font: 500 11.5px var(--wf-mono); color: var(--wf-fg-3); }
+.wf-combo [role="option"] { padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13.5px; }
+.wf-combo [role="option"].on { background: var(--wf-accent-soft); }
+.wf-textarea.wf-prose { font-family: inherit; font-size: inherit; }
 .wf-title-input { font-size: 18px; font-weight: 600; width: 100%; }
-.wf-editor-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.wf-editor-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .wf-editor-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
 @media (max-width: 900px) { .wf-editor-grid { grid-template-columns: 1fr; } }
 .wf-section { margin: 12px 0; }
@@ -178,6 +205,7 @@
 .wf-kpis dt { font-size: 12.5px; color: var(--wf-fg-2); }
 .wf-kpis dd { margin: 0; font-size: 20px; font-weight: 600; }
 .wf-day { min-width: 7em; font-size: 13px; color: var(--wf-fg-2); }
-.wf-assignee { display: flex; flex-wrap: wrap; gap: 0 8px; align-items: flex-end; }
+.wf-assignee { flex: 1 1 320px; max-width: 520px; }
+.wf-assignee > .wf-small { margin-bottom: 2px; }
 .wf-editor-form { max-width: 760px; }
 @media (max-width: 900px) { .wf-work-grid { grid-template-columns: 1fr; } }

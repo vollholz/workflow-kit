@@ -1,6 +1,6 @@
 /**
  * REST-Routen des Baukastens unter `<prefix>` (Standard `/v1`): Workflows (Entwurf, Prüfen, Aktivieren, Pausieren,
- * Archivieren, Versionen), manueller Start, Probelauf, Läufe mit Schrittprotokoll, Vorfälle, Einstellungen, Status und
+ * Fortsetzen, Archivieren, Versionen), manueller Start, Probelauf, Läufe mit Schrittprotokoll, Vorfälle, Einstellungen, Status und
  * Angaben für den Editor (`meta`: angemeldete Ereignisse, Aktionen, Bezugstypen mit Feldern). Aufgaben, Warteschlangen und Kalender
  * (Stufe 2) stehen in `task-routes.ts` und nutzen dieselben Hilfen (`handle`, `need`, `fail`).
  *
@@ -13,6 +13,8 @@
  * - Ausser Status, Meta und Einstellungen antworten alle Routen mit 404 `module-disabled`, solange das Modul in der
  *   Umgebung oder im Mandanten ausgeschaltet ist (Meta und Einstellungen nur in der Umgebung).
  * - Jede Änderung geht ins Audit (`host.audit`); Aktivieren, Pausieren, Archivieren melden zusätzlich `workflow.*`.
+ *   Fortsetzen startet die aktive Version wieder (keine neue Version, gleicher Akteur) und meldet `workflow.activated`
+ *   mit `resumed: true`.
  * - Entwürfe mit optimistischer Sperre: `If-Match: "<revision>"` oder `revision` im Körper; die Antwort trägt `ETag`.
  */
 import { randomUUID } from 'node:crypto';
@@ -440,6 +442,29 @@ export function registerRoutes(app: FastifyInstance, o: RouteOptions): void {
       return workflowJson(after, true);
     }));
   }
+
+  app.post(`${prefix}/workflows/:id/resume`, { attachValidation: true, schema: { params: idParams } }, async (req, reply) => handle(req, true, async (tx, actor, settings) => {
+    const w = await readable(tx, actor, (req.params as { id: string }).id);
+    await need(tx, actor, 'workflow:activate', scopeOf(w));
+    const locked = await loadWorkflow(tx, w.id, true);
+    if (locked.state !== 'paused' || locked.active_version === null || !locked.actor_id || !locked.actor_kind) {
+      throw fail(409, 'conflict', 'Nur pausierte Workflows mit einer aktiven Version lassen sich fortsetzen.');
+    }
+    const target: ActorRef = { id: locked.actor_id, kind: locked.actor_kind };
+    if (!(await host.active(tx, target))) throw fail(422, 'invalid', 'Der Akteur des Workflows ist nicht mehr aktiv. Aktiviere eine neue Version mit einem anderen Akteur.');
+    const active = (await tx.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${S('workflow')} WHERE state = 'active'`)).rows[0]?.n ?? 0;
+    if (active >= settings!.limits.activeWorkflows) throw fail(409, 'limit', `Höchstens ${settings!.limits.activeWorkflows} aktive Workflows je Mandant.`);
+    const v = (await tx.query<{ definition: WorkflowDefinition }>(
+      `SELECT definition FROM ${S('workflow_version')} WHERE workflow_id = $1 AND version = $2`, [w.id, locked.active_version])).rows[0];
+    if (!v) throw fail(409, 'conflict', 'Die aktive Version fehlt.');
+    await tx.query(`UPDATE ${S('workflow')} SET state = 'active', paused_reason = NULL, revision = revision + 1, updated_at = now() WHERE id = $1`, [w.id]);
+    await engine.rebuildTriggers(tx, locked, locked.active_version, v.definition);
+    await host.emit(tx, 'workflow.activated', null, { workflowId: w.id, version: locked.active_version, actor: target, resumed: true });
+    await host.audit(tx, { action: 'workflow.resumed', actor, onBehalfOf: target, workflowId: w.id, data: { version: locked.active_version } });
+    const after = await loadWorkflow(tx, w.id);
+    etag(reply, after);
+    return workflowJson(after, true);
+  }));
 
   app.get(`${prefix}/workflows/:id/versions`, { attachValidation: true, schema: { params: idParams } }, async req => handle(req, true, async (tx, actor) => {
     const w = await readable(tx, actor, (req.params as { id: string }).id);

@@ -211,7 +211,7 @@ export interface QueueBody {
   name?: string; description?: string | null; team?: RefJson; sort?: TaskSort; assignment?: QueueAssignment; calendarId?: string | null;
   slaTarget?: string | null; escalation?: EscalationJson | null;
 }
-export interface TeamOptionJson { type: string; id: string; label: string }
+export interface TeamOptionJson { type: string; id: string; label: string; /** Überschrift der Gruppe in der Auswahl (App). */ group?: string }
 export interface MemberJson extends ActorRefJson { open: number }
 
 export type WeekdayKey = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';

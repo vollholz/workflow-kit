@@ -173,7 +173,7 @@ export function useValidateDefinition(definition: WorkflowDefinition | null) {
   });
 }
 
-/** Aktivieren (mit Akteur), Pausieren, Archivieren. */
+/** Aktivieren (mit Akteur), Pausieren, Fortsetzen (gleiche Version), Archivieren. */
 export function useWorkflowLifecycle(id: string) {
   const w = useWorkflow();
   const qc = useQueryClient();
@@ -188,6 +188,7 @@ export function useWorkflowLifecycle(id: string) {
       onSuccess: done,
     }),
     pause: useMutation({ mutationFn: () => wfRequest<WorkflowDetail>(w, 'POST', `/workflows/${enc(id)}/pause`), onSuccess: done }),
+    resume: useMutation({ mutationFn: () => wfRequest<WorkflowDetail>(w, 'POST', `/workflows/${enc(id)}/resume`), onSuccess: done }),
     archive: useMutation({ mutationFn: () => wfRequest<WorkflowDetail>(w, 'POST', `/workflows/${enc(id)}/archive`), onSuccess: done }),
   };
 }

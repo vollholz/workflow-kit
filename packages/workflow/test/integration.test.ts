@@ -239,7 +239,7 @@ describe('Automation in der App «shop» (PostgreSQL)', { skip }, () => {
     assert.equal(s.enabled, true);
     ok(await call('gus', 'PUT', '/v1/workflows/settings', { enabled: true }));
     const status = ok(await call('ada', 'GET', '/v1/workflows/status'));
-    assert.deepEqual([status.available, status.stage, status.version], [true, 2, '0.3.0']);
+    assert.deepEqual([status.available, status.stage, status.version], [true, 2, '0.4.0']);
     assert.ok(audit.some(e => e.action === 'workflow.settings_changed'));
   });
 
@@ -436,6 +436,21 @@ describe('Automation in der App «shop» (PostgreSQL)', { skip }, () => {
     assert.equal((await admin.query('SELECT state FROM shop.orders WHERE id = $1', [order])).rows[0].state, 'cancelled');
     assert.equal(ok(await call('bea', 'GET', `/v1/workflow-runs/${run.id}`)).state, 'completed');
     ok(await call('ada', 'POST', `/v1/workflows/${created.id}/pause`));
+  });
+
+  test('Fortsetzen: pausierter Workflow läuft mit derselben Version und demselben Akteur weiter', async () => {
+    const id = await activeWorkflow('ada', 'Pausieren und fortsetzen', {
+      schemaVersion: 1, kind: 'automation', trigger: { manual: {} }, steps: [{ id: 'm', set: { ok: true } }],
+    });
+    assert.equal((await call('ada', 'POST', `/v1/workflows/${id}/resume`)).status, 409, 'nur pausierte');
+    ok(await call('ada', 'POST', `/v1/workflows/${id}/pause`));
+    const resumed = ok(await call('ada', 'POST', `/v1/workflows/${id}/resume`));
+    assert.deepEqual([resumed.state, resumed.activeVersion, resumed.pausedReason, resumed.actor], ['active', 1, null, { id: 'ada', kind: 'person' }]);
+    assert.equal(ok(await call('ada', 'GET', `/v1/workflows/${id}/versions`)).items.length, 1, 'keine neue Version');
+    const run = ok(await call('ada', 'POST', `/v1/workflows/${id}/runs`, {}), 201);
+    await drain();
+    assert.equal(ok(await call('ada', 'GET', `/v1/workflow-runs/${run.id}`)).state, 'completed');
+    ok(await call('ada', 'POST', `/v1/workflows/${id}/pause`));
   });
 
   test('Fehler: Wiederholung nach onError, dann Vorfall; «überspringen» setzt fort', async () => {
