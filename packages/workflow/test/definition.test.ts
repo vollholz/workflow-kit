@@ -55,8 +55,47 @@ test('Beispiel aus dem Konzept ist gültig', () => {
 });
 
 test('Schema ist versioniert und als Objekt exportiert', () => {
-  assert.equal((definitionSchema.properties as Record<string, { const?: number }>).schemaVersion!.const, 1);
-  has(errs({ ...example, schemaVersion: 2 }), '/schemaVersion', /Erwartet: «1»/);
+  assert.deepEqual((definitionSchema.properties as Record<string, { enum?: number[] }>).schemaVersion!.enum, [1, 2]);
+  assert.deepEqual(errs({ ...example, schemaVersion: 2 }), []);
+  has(errs({ ...example, schemaVersion: 3 }), '/schemaVersion', /Erlaubt: «1», «2»/);
+});
+
+const task = (extra: Record<string, unknown> = {}) => ({ id: 't', task: { title: 'Prüfen', assignee: { actor: { id: 'anna', kind: 'person' } }, ...extra } });
+const approval = { id: 'g', approval: { title: 'Freigeben', approvers: [{ actor: { id: 'bea', kind: 'person' } }], mode: 'first' } };
+const flow = (steps: unknown[], schemaVersion = 2) => ({ schemaVersion, kind: 'automation', trigger: { manual: {} }, steps });
+
+test('Wege nach Ergebnis (Fassung 2): Aufgabe mit eigenen Ergebnissen, Genehmigung mit genehmigt/abgelehnt', () => {
+  const ok = flow([
+    { ...task({ outcomes: ['Passt', 'Nachbessern'] }), branches: { Passt: [{ id: 'a', set: { x: 1 } }], Nachbessern: [{ id: 'b', end: { result: 'cancelled' } }] } },
+    { ...approval, branches: { approved: [{ id: 'c', set: { y: 1 } }], rejected: [] } },
+  ]);
+  const r = validateDefinition(ok);
+  assert.deepEqual(r.errors, []);
+  has(errs(flow([{ ...task(), branches: { done: [] } }], 1)), '/steps/0/branches', /Fassung 2/);
+  has(errs(flow([{ ...task({ outcomes: ['Passt'] }), branches: { Anders: [] } }])), '/steps/0/branches/Anders', /keinem Ergebnis/);
+  has(errs(flow([{ ...approval, branches: { maybe: [] } }])), '/steps/0/branches/maybe', /Unbekannte Angabe/);
+  has(errs(flow([{ ...approval, branches: { approved: [{ id: 'g', set: { x: 1 } }] } }])), '/steps/0/branches/approved/0/id', /mehrfach/);
+  assert.deepEqual(errs(flow([task({ outcomes: ['Geprüft', 'Zurück an Absender'] })])), [], 'Text mit Umlauten und Leerzeichen');
+  has(errs(flow([task({ outcomes: ['a/b'] })])), '/steps/0/task/outcomes/0', /ohne «\/»/);
+  has(errs(flow([task({ outcomes: [' x'] })])), '/steps/0/task/outcomes/0', /Leerzeichen/);
+});
+
+test('Hinweise: leerer Weg ohne Folgeschritt, Schritte nach «Beenden», «Wenn» ohne Schritte', () => {
+  const hints = (steps: unknown[]) => validateDefinition(flow(steps)).warnings;
+  assert.deepEqual(hints([approval]).map(h => [h.path, h.message]), [
+    ['/steps/0/branches/approved', 'Nach «Genehmigt» geschieht nichts'], ['/steps/0/branches/rejected', 'Nach «Abgelehnt» geschieht nichts'],
+  ]);
+  assert.deepEqual(hints([{ ...approval, branches: { approved: [{ id: 'a', set: { x: 1 } }] } }]).map(h => h.path), ['/steps/0/branches/rejected']);
+  assert.deepEqual(hints([approval, { id: 'n', set: { x: 1 } }]), [], 'danach folgt ein Schritt');
+  assert.deepEqual(hints([{ id: 'w', if: { field: 'vars.x', op: 'isSet' }, then: [approval] }, { id: 'n', set: { x: 1 } }]), [], 'nach dem Wenn folgt ein Schritt');
+  assert.deepEqual(hints([task()]), [], 'ein Ergebnis ist kein Weg');
+  assert.deepEqual(hints([task({ outcomes: ['Passt', 'Nachbessern'] })]).map(h => h.message), ['Nach «Passt» geschieht nichts', 'Nach «Nachbessern» geschieht nichts']);
+  assert.deepEqual(hints([{ id: 'e', end: { result: 'completed' } }, { id: 'n', set: { x: 1 } }]).map(h => [h.path, h.message]), [['/steps/1', 'Wird nie ausgeführt: Der Schritt davor beendet den Lauf']]);
+  assert.deepEqual(hints([{ id: 'w', if: { field: 'vars.x', op: 'isSet' }, then: [] }, { id: 'n', set: { x: 1 } }]).map(h => h.path), ['/steps/0/then']);
+  const bad = validateDefinition(flow([approval, { id: 'g', set: { x: 1 } }]));
+  assert.equal(bad.ok, false);
+  assert.deepEqual(bad.warnings, [], 'Hinweise auch bei Fehlern im Inhalt');
+  assert.deepEqual(validateDefinition({}).warnings, [], 'kein Hinweis bei ungültigem Schema');
 });
 
 test('Pflichtangaben und unbekannte Angaben mit Pfad', () => {

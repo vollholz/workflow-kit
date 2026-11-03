@@ -9,21 +9,39 @@
  * - Meldungen der Prüfung (`POST /workflows/validate`) gehören zu dem Schritt, zu dem ihr Pfad gehört (`ownErrors`).
  * - Aufgabe und Genehmigung (Stufe 2) mit Titel, Zuständigen, Formular, Ergebnissen, Frist und Priorität bzw.
  *   Genehmigenden und Art; Unterabläufe (spätere Stufe) zeigt die Karte nur an.
+ * - Ergebnisse sind Wege (Etappe 3): Eine Aufgabe mit zwei oder mehr Ergebnissen und jede Genehmigung haben je Ergebnis
+ *   einen Weg (`branches`). Wird ein Ergebnis umbenannt, wandert sein Weg mit; eines mit Schritten im Weg lässt sich erst
+ *   entfernen, wenn der Weg leer ist.
+ * - Pfade mit Wegen: `/steps/1/branches/Nachbessern/0`. Nummern im Weg: erstes Ergebnis «2.1», weitere «2.b1», «2.c1».
  */
 import { createContext, useContext, useId } from 'react';
 import { useQueues } from './api.ts';
 import { AssigneeInput, AssigneeText, describeAssignee } from './assignee.tsx';
 import { ConditionBuilder, describeCondition } from './conditions.tsx';
 import { SchemaForm } from './forms.tsx';
-import { TemplateInput, type ContextField } from './placeholders.tsx';
+import { describeTemplate, TemplateInput, type ContextField } from './placeholders.tsx';
 import { useWorkflow } from './provider.tsx';
 import type { ApprovalMode, ApprovalStep, DefinitionError, FieldDefJson, OnError, Step, TaskPriority, TaskStep, WorkflowMetaJson } from './types.ts';
-import { MODE_LABEL, plural, PRIORITY_LABEL } from './ui.tsx';
+import { MODE_LABEL, outcomeLabel, plural, PRIORITY_LABEL } from './ui.tsx';
+import { kindOf, outcomesOfStep, STEP_KIND_LABEL, stepTitle } from './paths.ts';
+
+export {
+  hasWays, kindOf, outcomesOfStep, pathHops, placeOfPath, STEP_KIND_LABEL, stepNumberOfPath, stepTitle, wayLetter,
+} from './paths.ts';
 
 export interface EditorContext {
   meta: WorkflowMetaJson | undefined;
+  /** Daten, die an der aktuellen Stelle feststehen (im Detail eines Schritts: nur aus Auslöser und früheren Schritten). */
   fields: ContextField[];
+  /** Alle Daten der Definition (Bezeichnungen der Chips, auch an Stellen, wo sie nicht feststehen). */
+  allFields?: ContextField[];
+  /** Daten an der Stelle eines Schritts. */
+  fieldsAt?: (path: string) => ContextField[];
   errors: DefinitionError[];
+  /** Hinweise der Prüfung, die nicht hindern (leerer Weg, Schritte nach «Beenden»). */
+  warnings?: DefinitionError[];
+  /** Schritte der Definition (für Nummern in Wegen). */
+  steps?: Step[];
   readOnly: boolean;
   newId: () => string;
 }
@@ -35,13 +53,7 @@ export const useEditor = () => {
 };
 
 export type StepKindName = 'action' | 'if' | 'foreach' | 'wait' | 'set' | 'end' | 'task' | 'approval';
-export const STEP_KIND_LABEL: Record<string, string> = {
-  action: 'Aktion', if: 'Wenn / Sonst', foreach: 'Für jedes', wait: 'Warten', set: 'Werte setzen', end: 'Beenden',
-  task: 'Aufgabe', approval: 'Genehmigung', subflow: 'Unterablauf',
-};
 export const ADDABLE: StepKindName[] = ['action', 'if', 'foreach', 'wait', 'task', 'approval', 'set', 'end'];
-
-export const kindOf = (s: Step): string => (['action', 'if', 'foreach', 'wait', 'set', 'end', 'task', 'approval', 'subflow'] as const).find(k => k in s) ?? 'unbekannt';
 
 export function newStep(kind: StepKindName, id: string): Step {
   switch (kind) {
@@ -105,51 +117,27 @@ export function DurationInput({ value, onChange, label }: { value: string; onCha
 
 // ---------------------------------------------------------------- Liste
 
-/** Meldungen genau dieses Schritts (ohne die verschachtelter Schritte). */
+/** Meldungen genau dieses Schritts (ohne die verschachtelter Schritte; ein leerer Weg gehört zum Schritt). */
 export function ownErrors(errors: DefinitionError[], path: string): DefinitionError[] {
   return errors.filter(e => {
     if (e.path !== path && !e.path.startsWith(`${path}/`)) return false;
     const rest = e.path.slice(path.length);
-    return !/^\/(then|else|steps|onError\/steps)\/\d+/.test(rest);
+    return !/^\/(then|else|steps|onError\/steps|branches\/[^/]+)\/\d+/.test(rest);
   });
-}
-
-/** Nummer eines Schritts aus seinem Pfad, wie die Liste sie zeigt (`/steps/1/then/0` → «2.1», `else` → «2.s1»). */
-export function stepNumberOfPath(path: string): string | null {
-  const re = /\/(steps|then|else)\/(\d+)/g;
-  let n = '';
-  for (let m = re.exec(path); m; m = re.exec(path)) {
-    const i = Number(m[2]) + 1;
-    n = n ? `${n}.${m[1] === 'else' ? 's' : ''}${i}` : String(i);
-  }
-  return n || null;
-}
-
-/** Wo eine Meldung der Prüfung hingehört, in Worten («Auslöser», «Schritt 2.1»). */
-export function placeOfPath(path: string): string {
-  if (path.startsWith('/trigger')) return 'Auslöser';
-  const n = stepNumberOfPath(path);
-  return n ? `Schritt ${n}` : 'Workflow';
-}
-
-/** Art und Titel eines Schritts, z. B. «Aufgabe «Gerät prüfen»»; ohne Titel nur die Art. */
-export function stepTitle(s: Step, meta: WorkflowMetaJson | undefined): string {
-  const kind = STEP_KIND_LABEL[kindOf(s)] ?? 'Schritt';
-  const title = s.label || ('task' in s ? s.task.title : 'approval' in s ? s.approval.title : 'action' in s ? meta?.actions.find(a => a.key === s.action)?.label : '') || '';
-  return title && title !== kind ? `${kind} «${title}»` : kind;
 }
 
 export function summary(s: Step, meta: WorkflowMetaJson | undefined, fields: ContextField[]): string {
   if ('action' in s) return s.action ? (meta?.actions.find(a => a.key === s.action)?.label ?? s.action) : 'Aktion noch nicht gewählt';
   if ('if' in s) return `Wenn ${describeCondition(s.if, fields)}`;
-  if ('foreach' in s) return `Für jeden Eintrag in ${s.foreach.items || '…'}`;
-  if ('wait' in s) return s.wait.duration ? `Warten: ${describeDuration(s.wait.duration)}` : s.wait.until ? `Warten bis ${s.wait.until}` : 'Warten auf ein Ereignis';
+  if ('foreach' in s) return `Für jeden Eintrag in ${s.foreach.items ? describeTemplate(s.foreach.items, fields) : '…'}`;
+  if ('wait' in s) return s.wait.duration ? `Warten: ${describeDuration(s.wait.duration)}` : s.wait.until ? `Warten bis ${describeTemplate(s.wait.until, fields)}` : 'Warten auf ein Ereignis';
   if ('set' in s) return `Setzt ${Object.keys(s.set).join(', ') || '…'}`;
   if ('end' in s) return `Lauf beenden: ${END_LABEL[s.end.result]}`;
   if ('task' in s) return `Aufgabe «${s.task.title || '…'}» für ${describeAssignee(s.task.assignee)}${s.task.due ? `, Frist ${describeDuration(s.task.due)}` : ''}`;
   if ('approval' in s) return `Genehmigung «${s.approval.title || '…'}» bei ${s.approval.approvers.map(a => describeAssignee(a)).join(', ')}`;
   return `${STEP_KIND_LABEL[kindOf(s)] ?? 'Schritt'} (folgt in einer späteren Stufe)`;
 }
+
 /**
  * Zusammenfassung eines Schritts; bei Aufgabe und Genehmigung mit Namen der Zuständigen (Person, Team, Warteschlange).
  * `short`: ohne Art und Titel (zweite Zeile im Ablauf, unter dem Titel), z. B. «für Warteschlange Support, Frist 2 Arbeitstage».
@@ -249,8 +237,8 @@ export function StepBody({ step, number, onChange }: { step: Step; number: strin
   if ('foreach' in step) {
     return (
       <>
-        <TemplateInput label="Liste (Pfad oder Platzhalter)" value={step.foreach.items} fields={ed.fields} required
-          hint="z. B. {{subject.values.positionen}}; jeder Eintrag durchläuft die Schritte darunter."
+        <TemplateInput label="Liste" value={step.foreach.items} fields={ed.fields} required
+          hint="Daten, die eine Liste enthalten; jeder Eintrag durchläuft die Schritte im Weg «Für jeden Eintrag»."
           onChange={items => onChange({ ...step, foreach: { ...step.foreach, items } })} />
         <div className="wf-row">
           <div className="wf-field">
@@ -282,7 +270,7 @@ export function StepBody({ step, number, onChange }: { step: Step; number: strin
         </div>
         {mode === 'duration' ? <DurationInput label="Dauer" value={step.wait.duration ?? ''} onChange={duration => onChange({ ...step, wait: { duration } })} /> : null}
         {mode === 'until' ? (
-          <TemplateInput label="Zeitpunkt" value={step.wait.until ?? ''} fields={ed.fields} required hint="Datum und Zeit (z. B. 2026-12-31T08:00) oder Platzhalter"
+          <TemplateInput label="Zeitpunkt" value={step.wait.until ?? ''} fields={ed.fields} required hint="Datum und Zeit (z. B. 2026-12-31T08:00) oder Daten"
             onChange={until => onChange({ ...step, wait: { until } })} />
         ) : null}
       </>
@@ -402,8 +390,6 @@ function FormFieldsEditor({ fields, onChange, name }: { fields: FieldDefJson[]; 
 
 function TaskEditor({ step, onChange, name }: { step: TaskStep; onChange: (s: Step) => void; name: string }) {
   const ed = useEditor();
-  const { ui } = useWorkflow();
-  const id = useId();
   const t = step.task;
   const set = (patch: Partial<TaskStep['task']>) => {
     const next = { ...t, ...patch } as Record<string, unknown>;
@@ -416,14 +402,62 @@ function TaskEditor({ step, onChange, name }: { step: TaskStep; onChange: (s: St
       <TemplateInput label="Beschreibung (optional)" value={t.description ?? ''} fields={ed.fields} onChange={d => set({ description: d || undefined })} />
       <AssigneeInput label="Zuständig" value={t.assignee} onChange={assignee => set({ assignee })} />
       <FormFieldsEditor name={name} fields={t.form ?? []} onChange={form => set({ form })} />
-      <div className="wf-field">
-        <label htmlFor={`${id}-o`}>Ergebnisse (mit Komma getrennt)</label>
-        <ui.Input id={`${id}-o`} value={(t.outcomes ?? []).join(', ')} placeholder="done" aria-describedby={`${id}-oh`}
-          onChange={e => set({ outcomes: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })} />
-        <span id={`${id}-oh`} className="wf-hint">{`Danach als {{steps.${step.id}.outcome}} und {{steps.${step.id}.values.…}} verfügbar.`}</span>
-      </div>
+      <OutcomesEditor step={step} onChange={onChange} name={name} />
       <PriorityAndDue name={name} due={t.due} priority={t.priority} onChange={v => set(v)} queueId={'queue' in t.assignee ? t.assignee.queue : undefined} />
     </>
+  );
+}
+
+/**
+ * Ergebnisse einer Aufgabe als Liste: ohne Angabe gibt es eines («Erledigt»). Umbenennen nimmt den Weg mit; ein Ergebnis
+ * mit Schritten im Weg lässt sich erst entfernen, wenn der Weg leer ist.
+ */
+function OutcomesEditor({ step, onChange, name }: { step: TaskStep; onChange: (s: Step) => void; name: string }) {
+  const { ui } = useWorkflow();
+  const ed = useEditor();
+  const id = useId();
+  const outcomes = outcomesOfStep(step);
+  const branches = (step.branches ?? {}) as Record<string, Step[] | undefined>;
+  const write = (next: string[], ways: Record<string, Step[] | undefined>) => {
+    const task = { ...step.task } as TaskStep['task'];
+    if (next.length === 1 && next[0] === 'done') delete task.outcomes; else task.outcomes = next;
+    const kept = Object.fromEntries(Object.entries(ways).filter(([k, l]) => next.includes(k) && l?.length)) as Record<string, Step[]>;
+    const out: TaskStep = { ...step, task };
+    if (Object.keys(kept).length) out.branches = kept; else delete out.branches;
+    onChange(out);
+  };
+  const rename = (i: number, text: string) => {
+    const old = outcomes[i]!;
+    const ways = { ...branches };
+    if (old in ways) { ways[text] = ways[old]; delete ways[old]; }
+    write(outcomes.map((o, j) => (j === i ? text : o)), ways);
+  };
+  const add = () => {
+    let n = outcomes.length + 1;
+    while (outcomes.includes(`Ergebnis ${n}`)) n++;
+    write([...outcomes, `Ergebnis ${n}`], branches);
+  };
+  return (
+    <fieldset className="wf-field wf-outcomes" aria-describedby={`${id}-h`}>
+      <legend>Ergebnisse</legend>
+      {outcomes.map((o, i) => {
+        const busy = !!branches[o]?.length;
+        return (
+          <div key={i} className="wf-row">
+            <ui.Input aria-label={`Ergebnis ${i + 1}`} value={outcomeLabel(o)} disabled={ed.readOnly} onChange={e => rename(i, e.target.value)} />
+            {outcomes.length > 1 && !ed.readOnly ? (
+              <ui.Button size="sm" variant="ghost" aria-label={`${name}: Ergebnis «${outcomeLabel(o)}» entfernen`} aria-disabled={busy || undefined}
+                title={busy ? 'Zuerst die Schritte im Weg entfernen' : undefined}
+                onClick={() => { if (!busy) write(outcomes.filter((_, j) => j !== i), branches); }}>✕</ui.Button>
+            ) : null}
+          </div>
+        );
+      })}
+      {!ed.readOnly ? <ui.Button size="sm" variant="ghost" className="wf-addlink" onClick={add}>Ergebnis hinzufügen</ui.Button> : null}
+      <span id={`${id}-h`} className="wf-hint">
+        {outcomes.length > 1 ? 'Wer die Aufgabe erledigt, wählt eines. Jedes Ergebnis hat im Ablauf einen eigenen Weg.' : 'Mit zwei oder mehr Ergebnissen entstehen im Ablauf Wege, z. B. «Passt» und «Nachbessern».'}
+      </span>
+    </fieldset>
   );
 }
 
@@ -455,7 +489,7 @@ function ApprovalEditor({ step, onChange, name }: { step: ApprovalStep; onChange
         </ui.Select>
       </div>
       <label className="wf-check-row"><ui.Input type="checkbox" checked={a.reasonOnReject !== false} onChange={e => set({ reasonOnReject: e.target.checked ? undefined : false })} /> Begründung bei Ablehnung verlangen</label>
-      <span className="wf-hint">{`Ergebnis als {{steps.${step.id}.outcome}} («approved» oder «rejected»), Begründung als {{steps.${step.id}.reason}}.`}</span>
+      <span className="wf-hint">Danach geht es im Ablauf auf dem Weg «Genehmigt» oder «Abgelehnt» weiter.</span>
       <PriorityAndDue name={name} due={a.due} priority={a.priority} onChange={v => set(v)} queueId={a.approvers.map(x => ('queue' in x ? x.queue : '')).find(Boolean)} />
     </>
   );

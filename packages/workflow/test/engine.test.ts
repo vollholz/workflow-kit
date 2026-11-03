@@ -1,7 +1,7 @@
 /** Engine ohne Datenbank: Bestimmen des nächsten Schritts, Grenzen, Schleifenschutz, Protokoll, Stufe-1-Prüfung. */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { advance, definitionPath, END, END_FAILED, enter, listAt, loopBindings, stepAt, type Loops } from '../src/cursor.ts';
+import { advance, afterOutcome, definitionPath, END, END_FAILED, enter, listAt, loopBindings, stepAt, type Loops } from '../src/cursor.ts';
 import {
   chainDecision, definitionChecksum, DEFAULT_LIMITS, effectiveLimits, foreachLimit, redact, stageProblems, stepLimitReached,
   type WorkflowDefinition,
@@ -56,6 +56,32 @@ test('nächster Schritt: Durchgänge einer Schleife, Fehlerpfade', () => {
   assert.equal(enter(def, '/onError/steps', loops), '/onError/steps/0');
   assert.equal(advance(def, '/onError/steps/0', loops), END_FAILED, 'Fehlerpfad der Definition endet als fehlgeschlagen');
   assert.throws(() => advance(def, '/steps/0/bogus/0', loops), /Unbekannte Liste/);
+});
+
+test('nächster Schritt: Wege nach Ergebnis, auch wenn ein Ergebnis wie eine Liste heisst', () => {
+  const d = {
+    schemaVersion: 2, kind: 'automation', trigger: { manual: {} },
+    steps: [
+      {
+        id: 't', task: { title: 'x', assignee: { actor: { id: 'a', kind: 'person' } }, outcomes: ['then', 'items', 'leer'] },
+        branches: { then: [{ id: 't1', set: { a: 1 } }, { id: 't2', set: { a: 2 } }], items: [{ id: 'l', foreach: { items: 'vars.list', as: 'x' }, steps: [{ id: 'l1', set: { b: 1 } }] }] },
+      },
+      { id: 'n', set: { c: 1 } },
+    ],
+  } as unknown as WorkflowDefinition;
+  const none: Loops = {};
+  const t = stepAt(d, '/steps/0') as Parameters<typeof afterOutcome>[2];
+  assert.equal(afterOutcome(d, '/steps/0', t, 'then', none), '/steps/0/branches/then/0');
+  assert.equal(afterOutcome(d, '/steps/0', t, 'leer', none), '/steps/1', 'leerer Weg: nach der Aufgabe weiter');
+  assert.equal(afterOutcome(d, '/steps/0', t, 'cancelled', none), '/steps/1', 'abgebrochen: kein Weg');
+  assert.equal(advance(d, '/steps/0/branches/then/0', none), '/steps/0/branches/then/1');
+  assert.equal(advance(d, '/steps/0/branches/then/1', none), '/steps/1', 'nach dem Weg hinter der Aufgabe');
+  assert.equal(definitionPath('/steps/0/branches/items/0/items/1/steps/0'), '/steps/0/branches/items/0/steps/0');
+  const loops: Loops = { '/steps/0/branches/items/0': { items: ['p', 'q'], as: 'x' } };
+  assert.equal(stepAt(d, '/steps/0/branches/items/0/items/1/steps/0')?.id, 'l1');
+  assert.deepEqual(loopBindings('/steps/0/branches/items/0/items/1/steps/0', loops), { x: 'q', xIndex: 1 });
+  assert.equal(advance(d, '/steps/0/branches/items/0/items/0/steps/0', loops), '/steps/0/branches/items/0/items/1/steps/0');
+  assert.equal(advance(d, '/steps/0/branches/items/0/items/1/steps/0', loops), '/steps/1', 'nach Schleife und Weg');
 });
 
 test('Grenzen: Schritte je Lauf, Für-jedes, Mandant senkt nur', () => {

@@ -13,20 +13,24 @@
  * - Die Definition ändert sich nur über die reinen Hilfen (`withList`, `listAt`, `stepAt`, `splitPath`).
  * - Ohne `workflow:manage` (nur lesbar) gibt es keine Stellen zum Einfügen; Karten lassen sich trotzdem öffnen.
  * - Das Sheet hält den Fokus, Esc oder ein Klick daneben schliesst es, danach geht der Fokus zurück an den Auslöser.
+ * - Etappe 3: Eine Aufgabe mit zwei oder mehr Ergebnissen und jede Genehmigung zeigen je Ergebnis einen Weg; ein leerer
+ *   Weg ohne Folgeschritt trägt den Hinweis «Hier geschieht nichts». Fehler und Hinweise der Prüfung stehen an der Karte.
+ * - Probelauf im Ablauf (`run`): Jede Karte zeigt, was geschähe; nicht erreichte Schritte und Wege sind blass. Bei Aufgabe
+ *   und Genehmigung lässt sich das angenommene Ergebnis wählen, der Probelauf läuft dann neu. Einfügen gibt es dabei nicht.
  */
 import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useWorkflow } from './provider.tsx';
+import { branchesOf, hasWays, innerList, outcomesOfStep, pathHops, stepNumberOfPath, wayLetter } from './paths.ts';
+import { describeTemplate, type ContextField } from './placeholders.tsx';
 import {
-  ADDABLE, CommonFields, kindOf, newStep, ownErrors, STEP_KIND_LABEL, StepBody, StepSummary, stepTitle, useEditor, type StepKindName,
+  ADDABLE, CommonFields, EditorCtx, kindOf, newStep, ownErrors, STEP_KIND_LABEL, StepBody, StepSummary, stepTitle, useEditor, type StepKindName,
 } from './steps.tsx';
-import type { Step, Trigger } from './types.ts';
-import { plural } from './ui.tsx';
+import type { DryRunStepJson, Step, Trigger } from './types.ts';
+import { outcomeLabel, plural } from './ui.tsx';
 
 /** Was im Ablauf gewählt ist: der Auslöser, ein Schritt (Pfad) oder eine Stelle zum Einfügen. */
 export type FlowSelection = { kind: 'trigger' } | { kind: 'step'; path: string } | { kind: 'insert'; list: string; index: number };
 
-const segments = (p: string) => p.split('/').filter(Boolean);
-type Lists = Record<string, Step[] | undefined>;
 
 /** Pfad eines Schritts → Liste und Index (`/steps/1/then/0` → `/steps/1/then`, 0). */
 export function splitPath(path: string): { list: string; index: number } {
@@ -34,14 +38,13 @@ export function splitPath(path: string): { list: string; index: number } {
   return { list: path.slice(0, i), index: Number(path.slice(i + 1)) };
 }
 
-/** Schritte einer Liste (`/steps`, `/steps/1/then`, `/steps/2/steps`); ein fehlendes «Sonst» ist leer. */
+/** Schritte einer Liste (`/steps`, `/steps/1/then`, `/steps/2/steps`, `/steps/3/branches/ok`); ein fehlender Weg ist leer. */
 export function listAt(steps: Step[], list: string): Step[] | undefined {
-  const s = segments(list);
   let cur: Step[] | undefined = steps;
-  for (let i = 1; i < s.length; i += 2) {
-    const st: Step | undefined = cur?.[Number(s[i])];
+  for (const hop of pathHops(`${list}/0`).slice(0, -1)) {
+    const st: Step | undefined = cur?.[hop.index];
     if (!st) return undefined;
-    cur = (st as unknown as Lists)[s[i + 1]!] ?? [];
+    cur = innerList(st, hop) ?? [];
   }
   return cur;
 }
@@ -51,39 +54,40 @@ export const stepAt = (steps: Step[], path: string): Step | undefined => {
   return listAt(steps, list)?.[index];
 };
 
-/** Neue Schrittliste, in der die Liste `list` durch `fn` ersetzt ist; ein leeres «Sonst» fällt weg. */
+/** Neue Schrittliste, in der die Liste `list` durch `fn` ersetzt ist; ein leeres «Sonst» und ein leerer Weg fallen weg. */
 export function withList(steps: Step[], list: string, fn: (l: Step[]) => Step[]): Step[] {
-  const rec = (cur: Step[], rest: string[]): Step[] => {
-    if (!rest.length) return fn(cur);
-    const [i, key, ...more] = rest as [string, string, ...string[]];
+  const hops = pathHops(`${list}/0`).slice(0, -1);
+  const rec = (cur: Step[], depth: number): Step[] => {
+    if (depth === hops.length) return fn(cur);
+    const hop = hops[depth]!;
     return cur.map((st, j) => {
-      if (j !== Number(i)) return st;
-      const next = rec((st as unknown as Lists)[key] ?? [], more);
+      if (j !== hop.index) return st;
+      const next = rec(innerList(st, hop) ?? [], depth + 1);
       const out = { ...st } as unknown as Record<string, unknown>;
-      if (key === 'else' && !next.length) delete out.else; else out[key] = next;
+      if (hop.list === 'branches') {
+        const ways: Record<string, Step[] | undefined> = { ...branchesOf(st), [hop.outcome!]: next };
+        if (!next.length) delete ways[hop.outcome!];
+        if (Object.keys(ways).length) out.branches = ways; else delete out.branches;
+      } else if (hop.list === 'onError/steps') out.onError = { ...st.onError, steps: next };
+      else if (hop.list === 'else' && !next.length) delete out.else;
+      else out[hop.list!] = next;
       return out as unknown as Step;
     });
   };
-  return rec(steps, segments(list).slice(1));
+  return rec(steps, 0);
 }
 
-/** Nummer eines Schritts wie im Ablauf («2.1», «2.s1»). */
-export function numberOf(path: string): string {
-  const s = segments(path);
-  let n = '';
-  for (let i = 1; i < s.length; i += 2) {
-    const k = Number(s[i]) + 1;
-    n = n ? `${n}.${s[i - 1] === 'else' ? 's' : ''}${k}` : String(k);
-  }
-  return n;
+/** Nummer eines Schritts wie im Ablauf («2.1», «2.s1», im zweiten Weg «2.b1»); mit den Schritten auch für Wege genau. */
+export function numberOf(path: string, steps?: Step[]): string {
+  return stepNumberOfPath(path, steps) ?? '';
 }
 
 const tone = (s: Step) => (('task' in s || 'approval' in s) ? 'human' : 'action' in s ? 'data' : 'flow');
 
-/** Titel eines Schritts ohne Art: eigene Bezeichnung, Titel der Aufgabe bzw. Aktion, sonst die Art. */
-function titleOnly(s: Step, actions: { key: string; label: string }[] | undefined): string {
-  return s.label || ('task' in s ? s.task.title : 'approval' in s ? s.approval.title : 'action' in s ? actions?.find(a => a.key === s.action)?.label : '')
-    || STEP_KIND_LABEL[kindOf(s)] || 'Schritt';
+/** Titel eines Schritts ohne Art: eigene Bezeichnung, Titel der Aufgabe bzw. Aktion, sonst die Art; Daten mit Bezeichnung. */
+function titleOnly(s: Step, actions: { key: string; label: string }[] | undefined, fields: ContextField[]): string {
+  const raw = s.label || ('task' in s ? s.task.title : 'approval' in s ? s.approval.title : 'action' in s ? actions?.find(a => a.key === s.action)?.label : '');
+  return (raw ? describeTemplate(raw, fields) : '') || STEP_KIND_LABEL[kindOf(s)] || 'Schritt';
 }
 
 const TRIGGER_TITLE = (t: Trigger) => ('event' in t ? 'Bei einem Ereignis' : 'schedule' in t ? 'Nach Zeitplan' : 'manual' in t ? 'Von Hand' : 'Später verfügbar');
@@ -98,8 +102,20 @@ function triggerSub(title: string, text: ReactNode): ReactNode {
   return rest ? rest[0]!.toUpperCase() + rest.slice(1) : null;
 }
 
+/** Probelauf im Ablauf: Ergebnis je Schritt (Pfad); das angenommene Ergebnis einer Aufgabe/Genehmigung ist wählbar. */
+export interface FlowRun {
+  steps: Map<string, DryRunStepJson>;
+  triggerMatches: boolean | null;
+  onAssume: (stepId: string, outcome: string) => void;
+  busy?: boolean;
+}
+
 export interface FlowViewProps {
   steps: Step[];
+  /** Probelauf auf den Karten (Modus «Probelauf»); ohne Angabe der Ablauf zum Bearbeiten. */
+  run?: FlowRun | null;
+  /** Keine Stellen zum Einfügen und kein Verschieben (Probelauf, auch bevor ein Ergebnis da ist). */
+  locked?: boolean;
   /** Auslöser und sein Satz; `null`, solange noch keiner gewählt ist (leerer Ablauf). */
   trigger: { value: Trigger; text: ReactNode } | null;
   sel: FlowSelection;
@@ -113,8 +129,10 @@ export interface FlowViewProps {
   onOpen: () => void;
 }
 
-export function FlowView({ steps, trigger, sel, onSelect, onAddFirst, onMove, onRemove, onOpen }: FlowViewProps) {
+export function FlowView({ steps, run, locked, trigger, sel, onSelect, onAddFirst, onMove, onRemove, onOpen }: FlowViewProps) {
   const ed = useEditor();
+  const warnings = ed.warnings ?? [];
+  const editable = !ed.readOnly && !run && !locked;
   const baseId = useId();
   const ref = useRef<HTMLDivElement>(null);
   const focusKey = useRef<string | null>(null);
@@ -130,7 +148,7 @@ export function FlowView({ steps, trigger, sel, onSelect, onAddFirst, onMove, on
     const go = (j: number) => { const r = cards[j]; if (r && j !== i) { r.focus(); r.click(); } };
     const isStep = key.startsWith('/');
     if (e.altKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
-      if (!isStep || ed.readOnly) return;
+      if (!isStep || !editable) return;
       e.preventDefault();
       const next = onMove(key, e.key === 'ArrowDown' ? 1 : -1);
       if (next) focusKey.current = next;
@@ -139,7 +157,7 @@ export function FlowView({ steps, trigger, sel, onSelect, onAddFirst, onMove, on
     if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); go(Math.min(cards.length - 1, i + 1)); return; }
     if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); go(Math.max(0, i - 1)); return; }
     if (e.key === 'Enter') { e.preventDefault(); onSelect(isStep ? { kind: 'step', path: key } : { kind: 'trigger' }); onOpen(); return; }
-    if (ed.readOnly) return;
+    if (!editable) return;
     if (e.key === 'Delete' && isStep) { e.preventDefault(); onRemove(key); return; }
     if (e.key === '+') {
       e.preventDefault();
@@ -151,15 +169,15 @@ export function FlowView({ steps, trigger, sel, onSelect, onAddFirst, onMove, on
   const isInsert = (list: string, index: number) => sel.kind === 'insert' && sel.list === list && sel.index === index;
   /** Verbindung vor einem Schritt, mit «+» zum Einfügen an dieser Stelle. */
   const link = (list: string, index: number, where: string) => (
-    <li className="wf-flow-link" aria-hidden={ed.readOnly || undefined}>
-      {!ed.readOnly ? (
+    <li className="wf-flow-link" aria-hidden={!editable || undefined}>
+      {editable ? (
         <button type="button" className="wf-flow-plus" aria-current={isInsert(list, index) || undefined} aria-label={`Schritt einfügen ${where}`} title="Schritt einfügen"
           onClick={() => onSelect({ kind: 'insert', list, index })}>+</button>
       ) : null}
     </li>
   );
   /** Ende eines Wegs: «Schritt hinzufügen». */
-  const tail = (list: string, index: number, where: string) => (ed.readOnly ? null : (
+  const tail = (list: string, index: number, where: string) => (!editable ? null : (
     <li className="wf-flow-tail">
       <button type="button" className="wf-flow-add" aria-current={isInsert(list, index) || undefined} aria-label={`Schritt einfügen ${where}`}
         onClick={() => onSelect({ kind: 'insert', list, index })}>
@@ -172,32 +190,66 @@ export function FlowView({ steps, trigger, sel, onSelect, onAddFirst, onMove, on
       {items.map((s, i) => {
         const path = `${list}/${i}`;
         const n = `${prefix}${i + 1}`;
-        const errs = ownErrors(ed.errors, path).length;
-        const kind = STEP_KIND_LABEL[kindOf(s)] ?? 'Schritt', title = titleOnly(s, ed.meta?.actions);
+        const errs = run ? 0 : ownErrors(ed.errors, path).length;
+        const hints = run ? 0 : ownErrors(warnings, path).length;
+        const kind = STEP_KIND_LABEL[kindOf(s)] ?? 'Schritt', title = titleOnly(s, ed.meta?.actions, ed.allFields ?? ed.fields);
+        const r = run?.steps.get(path);
+        const runState = !run ? null : !r ? 'skip' : r.error || r.allowed === false ? 'bad' : 'ok';
+        const runText = runState === 'skip' ? 'wird nicht erreicht' : runState === 'bad' ? 'würde scheitern' : runState === 'ok' ? 'durchlaufen' : '';
+        const issues = [errs ? plural(errs, 'Fehler', 'Fehler') : '', hints ? plural(hints, 'Hinweis', 'Hinweise') : ''].filter(Boolean).join(', ');
+        const taken = (way: string) => (!run || !r ? undefined : 'if' in s ? (way === 'then') === ((r.output as { result?: unknown } | undefined)?.result === true) : r.outcome === way);
         return (
           <Fragment key={s.id}>
             {link(list, i, i === 0 ? firstWhere : `nach Schritt ${prefix}${i}`)}
-            <li className={`wf-flow-item t-${tone(s)}`}>
+            <li className={`wf-flow-item t-${tone(s)}${runState ? ` run-${runState}` : ''}`}>
               <button type="button" className="wf-card" data-flow={path} aria-current={isSel(path) || undefined}
-                aria-label={`Schritt ${n}: ${stepTitle(s, ed.meta)}${errs ? `, ${plural(errs, 'Hinweis', 'Hinweise')}` : ''}`} aria-describedby={`${baseId}-${path}`}
+                aria-label={`Schritt ${n}: ${stepTitle(s, ed.meta)}${issues ? `, ${issues}` : ''}${runText ? `, im Probelauf ${runText}` : ''}`} aria-describedby={`${baseId}-${path}`}
                 onClick={() => onSelect({ kind: 'step', path })} onKeyDown={e => onKey(e, path)}>
                 <span className="wf-card-icon" aria-hidden="true">{n}</span>
                 <span className="wf-card-body" id={`${baseId}-${path}`}>
                   {title === kind ? null : <span className="wf-card-kind">{kind}</span>}
                   <span className="wf-card-title">{title}</span>
-                  <FlowSub step={s} />
+                  {run ? <span className="wf-card-sub">{r ? (r.error?.message ?? (r.allowed === false ? `Dem Akteur fehlen Rechte: ${(r.missing ?? []).join(', ')}` : r.summary)) : 'Wird nicht erreicht'}</span> : <FlowSub step={s} />}
                 </span>
-                {errs ? <span className="wf-card-err">{plural(errs, 'Hinweis', 'Hinweise')}</span> : null}
+                {errs || hints || runState === 'ok' || runState === 'bad' ? (
+                  <span className="wf-card-tags">
+                    {errs ? <span className="wf-card-err">{plural(errs, 'Fehler', 'Fehler')}</span> : null}
+                    {hints ? <span className="wf-card-warn">{plural(hints, 'Hinweis', 'Hinweise')}</span> : null}
+                    {runState === 'ok' || runState === 'bad' ? <span className={`wf-card-run ${runState}`} aria-hidden="true">{runState === 'ok' ? '✓' : '✕'}</span> : null}
+                  </span>
+                ) : null}
               </button>
+              {run && r?.outcomes && r.outcomes.length > 1 ? (
+                <div className="wf-assume" role="group" aria-label={`Angenommenes Ergebnis von Schritt ${n}`}>
+                  <span className="wf-assume-label" aria-hidden="true">Angenommen:</span>
+                  {r.outcomes.map(o => (
+                    <button key={o} type="button" aria-pressed={r.outcome === o} aria-disabled={run.busy || undefined}
+                      onClick={() => { if (!run.busy && r.outcome !== o) run.onAssume(s.id, o); }}>{outcomeLabel(o)}</button>
+                  ))}
+                </div>
+              ) : null}
               {'if' in s ? (
                 <div className="wf-flow-lanes">
-                  <Lane title="Dann">{renderList(`${path}/then`, s.then, `${n}.`, `Dann in Schritt ${n}`, `am Anfang von «Dann» in Schritt ${n}`)}</Lane>
-                  <Lane title="Sonst">{renderList(`${path}/else`, s.else ?? [], `${n}.s`, `Sonst in Schritt ${n}`, `am Anfang von «Sonst» in Schritt ${n}`)}</Lane>
+                  <Lane title="Dann" taken={taken('then')}>{renderList(`${path}/then`, s.then, `${n}.`, `Dann in Schritt ${n}`, `am Anfang von «Dann» in Schritt ${n}`)}</Lane>
+                  <Lane title="Sonst" taken={taken('else')}>{renderList(`${path}/else`, s.else ?? [], `${n}.s`, `Sonst in Schritt ${n}`, `am Anfang von «Sonst» in Schritt ${n}`)}</Lane>
                 </div>
               ) : null}
               {'foreach' in s ? (
                 <div className="wf-flow-lanes one">
                   <Lane title="Für jeden Eintrag">{renderList(`${path}/steps`, s.steps, `${n}.`, `Für jeden Eintrag in Schritt ${n}`, `am Anfang der Schleife in Schritt ${n}`)}</Lane>
+                </div>
+              ) : null}
+              {hasWays(s) ? (
+                <div className="wf-flow-lanes">
+                  {outcomesOfStep(s).map((o, k) => {
+                    const lp = `${path}/branches/${o}`;
+                    const label = outcomeLabel(o) || '…';
+                    return (
+                      <Lane key={`${k}:${o}`} title={label} taken={taken(o)} hint={!run && warnings.some(w => w.path === lp) ? 'Hier geschieht nichts' : undefined}>
+                        {renderList(lp, branchesOf(s)[o] ?? [], `${n}.${wayLetter(k)}`, `Weg «${label}» in Schritt ${n}`, `am Anfang von «${label}» in Schritt ${n}`)}
+                      </Lane>
+                    );
+                  })}
                 </div>
               ) : null}
             </li>
@@ -225,7 +277,7 @@ export function FlowView({ steps, trigger, sel, onSelect, onAddFirst, onMove, on
   return (
     <div className="wf-flowview" ref={ref}>
       <ol className="wf-flow" aria-label="Ablauf">
-        <li className="wf-flow-item t-start">
+        <li className={`wf-flow-item t-start${run ? (run.triggerMatches === false ? ' run-bad' : ' run-ok') : ''}`}>
           <button type="button" className="wf-card" data-flow="trigger" aria-current={isSel('trigger') || undefined} aria-label="Auslöser" aria-describedby={`${baseId}-start`}
             onClick={() => onSelect({ kind: 'trigger' })} onKeyDown={e => onKey(e, 'trigger')}>
             <span className="wf-card-icon" aria-hidden="true">
@@ -234,7 +286,8 @@ export function FlowView({ steps, trigger, sel, onSelect, onAddFirst, onMove, on
             <span className="wf-card-body" id={`${baseId}-start`}>
               <span className="wf-card-kind">Auslöser</span>
               <span className="wf-card-title">{triggerTitle}</span>
-              {triggerText ? <span className="wf-card-sub">{triggerText}</span> : null}
+              {run?.triggerMatches === false ? <span className="wf-card-sub">Das Ereignis passt nicht zum Filter: Der Workflow würde nicht starten.</span>
+                : triggerText ? <span className="wf-card-sub">{triggerText}</span> : null}
             </span>
           </button>
         </li>
@@ -244,10 +297,12 @@ export function FlowView({ steps, trigger, sel, onSelect, onAddFirst, onMove, on
   );
 }
 
-function Lane({ title, children }: { title: string; children: ReactNode }) {
+/** Weg unter einem Schritt; im Probelauf ist der nicht genommene Weg blass (`taken === false`). */
+function Lane({ title, hint, taken, children }: { title: string; hint?: string | undefined; taken?: boolean | undefined; children: ReactNode }) {
   return (
-    <div className="wf-lane">
+    <div className={`wf-lane${taken === false ? ' skip' : taken ? ' taken' : ''}`}>
       <span className="wf-lane-label">{title}</span>
+      {hint ? <span className="wf-lane-hint">{hint}</span> : null}
       {children}
     </div>
   );
@@ -437,16 +492,18 @@ export function StepDetail({ step, path, last, onChange, onRemove, onMove }: {
 }) {
   const ed = useEditor();
   const { ui } = useWorkflow();
-  const number = numberOf(path);
+  const number = numberOf(path, ed.steps);
   const name = `Schritt ${number}`;
   const errs = ownErrors(ed.errors, path);
+  const hints = ownErrors(ed.warnings ?? [], path);
   const { list, index } = splitPath(path);
+  const here = ed.fieldsAt ? { ...ed, fields: ed.fieldsAt(path) } : ed;
   return (
     <section className="wf-detail-step" aria-label={`${name}: ${stepTitle(step, ed.meta)}`}>
       <header className="wf-detail-head">
         <div className="wf-grow">
           <p className="wf-detail-ey">{`${name} · ${STEP_KIND_LABEL[kindOf(step)] ?? 'Schritt'}`}{list !== '/steps' ? ` · ${laneOf(list)}` : ''}</p>
-          <h3>{titleOnly(step, ed.meta?.actions)}</h3>
+          <h3>{titleOnly(step, ed.meta?.actions, ed.allFields ?? ed.fields)}</h3>
         </div>
         {!ed.readOnly ? (
           <div className="wf-step-tools">
@@ -457,16 +514,26 @@ export function StepDetail({ step, path, last, onChange, onRemove, onMove }: {
         ) : null}
       </header>
       {errs.length ? (
-        <ul className="wf-step-errors" aria-label={`Hinweise zu ${name}`}>
+        <ul className="wf-step-errors" aria-label={`Fehler in ${name}`}>
           {errs.map((e, i) => <li key={i}>{e.message}</li>)}
         </ul>
       ) : null}
-      <fieldset className="wf-step-body" disabled={ed.readOnly} aria-label={`${name} bearbeiten`}>
-        <StepBody step={step} number={number} onChange={onChange} />
-        <CommonFields step={step} onChange={onChange} name={name} />
-      </fieldset>
+      {hints.length ? (
+        <ul className="wf-step-hints" aria-label={`Hinweise zu ${name}`}>
+          {hints.map((e, i) => <li key={i}>{e.message}</li>)}
+        </ul>
+      ) : null}
+      <EditorCtx.Provider value={here}>
+        <fieldset className="wf-step-body" disabled={ed.readOnly} aria-label={`${name} bearbeiten`}>
+          <StepBody step={step} number={number} onChange={onChange} />
+          <CommonFields step={step} onChange={onChange} name={name} />
+        </fieldset>
+      </EditorCtx.Provider>
     </section>
   );
 }
 
-const laneOf = (list: string) => (list.endsWith('/then') ? 'Weg «Dann»' : list.endsWith('/else') ? 'Weg «Sonst»' : 'für jeden Eintrag');
+const laneOf = (list: string) => {
+  const way = /\/branches\/([^/]+)$/.exec(list);
+  return way ? `Weg «${outcomeLabel(way[1])}»` : list.endsWith('/then') ? 'Weg «Dann»' : list.endsWith('/else') ? 'Weg «Sonst»' : 'für jeden Eintrag';
+};

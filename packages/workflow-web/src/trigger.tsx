@@ -106,7 +106,7 @@ export function TriggerEditor({ trigger, onChange, meta, readOnly, errors }: {
       ) : null}
       {'schedule' in trigger ? <ScheduleEditor schedule={trigger.schedule} onChange={schedule => onChange({ schedule })} /> : null}
       {'manual' in trigger ? <ManualEditor trigger={trigger} onChange={onChange} /> : null}
-      {errors.length ? <ul className="wf-step-errors" aria-label="Hinweise zum Auslöser">{errors.map((e, i) => <li key={i}>{e.message}</li>)}</ul> : null}
+      {errors.length ? <ul className="wf-step-errors" aria-label="Fehler am Auslöser">{errors.map((e, i) => <li key={i}>{e.message}</li>)}</ul> : null}
     </fieldset>
   );
 }

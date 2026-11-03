@@ -10,6 +10,39 @@ folgen die Angaben für die Entwickler der App.
 
 ## [Unveröffentlicht]
 
+## [0.6.0] – 2026-11-03
+
+### Für Nutzer
+
+- Aufgaben und Genehmigungen haben Wege nach Ergebnis: Nach «Genehmigt» oder «Abgelehnt», nach «Passt» oder
+  «Nachbessern» laufen eigene Schritte, danach geht es nach der Aufgabe weiter.
+- Ergebnisse einer Aufgabe dürfen normaler Text sein, auch mit Umlauten und Leerzeichen («Zurück an Absender»).
+- Die Prüfung meldet neben Fehlern auch Hinweise, die das Aktivieren nicht hindern: ein Weg, auf dem nichts geschieht,
+  Schritte nach «Beenden», ein «Wenn» ohne Schritte.
+- Der Probelauf nimmt für Aufgaben und Genehmigungen das gewählte Ergebnis an und folgt dessen Weg.
+
+### Für den Betrieb
+
+- (keine)
+
+### Hinzugefügt
+
+- Definition Fassung 2 (`DEFINITION_SCHEMA_VERSION = 2`): `branches` an `task` (Ergebnis → Schritte) und `approval`
+  (`approved`, `rejected`). Fassung 1 bleibt gültig; Wege brauchen Fassung 2. Pfade `/steps/n/branches/<Ergebnis>/i`.
+- `validateDefinition` liefert `warnings` (auch bei Fehlern im Inhalt, nicht bei ungültigem Schema);
+  `POST /workflows/validate` antwortet mit `{ ok, errors, stage, warnings }`.
+- `POST /workflows/:id/dry-run`: `assume` (Schritt-ID → Ergebnis); je Schritt `outcomes` und `outcome`.
+- `outcomesOf(step)`, `outcomeName(outcome)`; im Cursor `afterOutcome`.
+
+### Geändert
+
+- Ergebnisse einer Aufgabe: 1–64 Zeichen ohne «/» und «~», ohne Leerzeichen am Anfang oder Ende (bisher ein Name aus
+  Buchstaben, Ziffern und «_»). Bestehende Ergebnisse bleiben gültig.
+- `DefinitionResult` trägt `warnings`; `schemaVersion` ist `1 | 2`.
+- Nach dem Erledigen einer Aufgabe setzt `resumeAfterTask` im Weg des Ergebnisses fort (ohne Weg wie bisher nach dem
+  Schritt; «cancelled» hat keinen Weg).
+- Probelauf: «Beenden» nennt das Ergebnis auf Deutsch («beendet den Lauf: erfolgreich»).
+
 ## [0.5.0] – 2026-11-03
 
 ### Für Nutzer

@@ -3,7 +3,7 @@
  * Aktion in `/workflows/meta`), `FieldForm` das Formular eines manuellen Auslösers aus `FieldDef`-Feldern.
  *
  * Regeln: Beschriftung aus `title` bzw. `label`, Hinweis aus `description`, Pflichtfelder markiert. In Aktionen dürfen
- * Texte und Zahlen Platzhalter `{{…}}` enthalten (die Engine setzt sie beim Lauf ein); Listen und Angaben in `{…}`
+ * Texte und Zahlen Daten (`{{…}}`, als Chip) enthalten (die Engine setzt sie beim Lauf ein); Listen und Angaben in `{…}`
  * werden als JSON bearbeitet. Feldarten der App (`fields` im Provider) ersetzen die eingebaute Eingabe.
  */
 import { useId, useState } from 'react';
@@ -81,7 +81,7 @@ function SchemaField({ name, prop, required, value, onChange, fields, disabled }
   const numeric = type === 'number' || type === 'integer';
   return (
     <TemplateInput label={label} required={required} disabled={disabled} fields={fields}
-      hint={[hint, numeric ? 'Zahl oder Platzhalter' : null].filter(Boolean).join(' · ') || undefined}
+      hint={[hint, numeric ? 'Zahl oder Daten' : null].filter(Boolean).join(' · ') || undefined}
       value={value === undefined || value === null ? '' : String(value)}
       onChange={v => onChange(numeric && v.trim() !== '' && !v.includes('{{') && !Number.isNaN(Number(v)) ? Number(v) : v)} />
   );

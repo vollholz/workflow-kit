@@ -49,7 +49,7 @@ export {
 } from './tasks.ts';
 
 /** Version des Pakets (gleich wie in package.json, geprüft im Test). */
-export const WORKFLOW_PACKAGE_VERSION = '0.5.0';
+export const WORKFLOW_PACKAGE_VERSION = '0.6.0';
 /** Ausbaustufe nach Konzept Abschnitt 13. */
 export const WORKFLOW_STAGE = 2;
 

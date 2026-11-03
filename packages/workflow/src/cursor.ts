@@ -4,16 +4,18 @@
  *
  * Ein **Ausführungspfad** ist ein JSON Pointer in die Definition, ergänzt um den Durchgang einer «Für jedes»-Schleife:
  * `/steps/2`, `/steps/0/then/1`, `/steps/1/items/3/steps/0` (Schritt 0 im vierten Durchgang der Schleife `/steps/1`),
- * `/steps/4/onError/steps/0` (Fehlerpfad eines Schritts), `/onError/steps/0` (Fehlerpfad der Definition). Der Pfad ist
- * im Schrittprotokoll mit dem Versuch eindeutig.
+ * `/steps/3/branches/Nachbessern/0` (Weg nach einem Ergebnis), `/steps/4/onError/steps/0` (Fehlerpfad eines Schritts),
+ * `/onError/steps/0` (Fehlerpfad der Definition). Der Pfad ist im Schrittprotokoll mit dem Versuch eindeutig.
  *
  * Regeln:
- * - Nach dem letzten Schritt eines Zweigs (`then`/`else`) geht es nach dem Wenn-Schritt weiter, nach einem Durchgang
- *   mit dem nächsten Durchgang oder nach der Schleife, nach dem Fehlerpfad eines Schritts nach diesem Schritt.
+ * - Nach dem letzten Schritt eines Zweigs (`then`/`else`) geht es nach dem Wenn-Schritt weiter, nach einem Weg nach
+ *   Ergebnis nach der Aufgabe bzw. Genehmigung, nach einem Durchgang mit dem nächsten Durchgang oder nach der Schleife,
+ *   nach dem Fehlerpfad eines Schritts nach diesem Schritt. Ein Ergebnis kann «then» oder «items» heissen: Wege werden
+ *   vor allen anderen Listen erkannt, Durchgänge nur nach dem Index eines Schritts.
  * - Nach dem Fehlerpfad der Definition endet der Lauf als fehlgeschlagen (`END_FAILED`).
  * - Die Einträge einer Schleife stehen im Lauf (`loops[<Pfad der Schleife>]`), nicht im Pfad.
  */
-import type { Step, WorkflowDefinition } from './definition.ts';
+import type { ApprovalStep, Step, TaskStep, WorkflowDefinition } from './definition.ts';
 
 /** Lauf ist zu Ende (erfolgreich). */
 export const END = null;
@@ -28,7 +30,7 @@ const isIndex = (s: string | undefined) => s !== undefined && /^\d+$/.test(s);
 
 /** Ausführungspfad → Pfad in der Definition (ohne `items/<n>`). */
 export function definitionPath(execPath: string): string {
-  return execPath.replace(/\/items\/\d+(?=\/steps(?:\/|$))/g, '');
+  return execPath.replace(/(?<=\/\d+)\/items\/\d+(?=\/steps(?:\/|$))/g, '');
 }
 
 /** Liste von Schritten unter einem Listenpfad (`/steps`, `/steps/0/then`, `/steps/1/items/2/steps`, …). */
@@ -75,8 +77,9 @@ function afterList(def: WorkflowDefinition, listPath: string, loops: Loops): Pos
   if (listPath === '/onError/steps') return END_FAILED;
   const segs = listPath.split('/');
   const last = segs.at(-1);
+  if (segs.at(-2) === 'branches' && isIndex(segs.at(-3))) return advance(def, segs.slice(0, -2).join('/'), loops);
   if (last === 'then' || last === 'else') return advance(def, segs.slice(0, -1).join('/'), loops);
-  if (last === 'steps' && segs.at(-3) === 'items' && isIndex(segs.at(-2))) {
+  if (last === 'steps' && segs.at(-3) === 'items' && isIndex(segs.at(-2)) && isIndex(segs.at(-4))) {
     const owner = segs.slice(0, -3).join('/');
     const n = Number(segs.at(-2));
     const loop = loops[owner];
@@ -85,6 +88,12 @@ function afterList(def: WorkflowDefinition, listPath: string, loops: Loops): Pos
   }
   if (last === 'steps' && segs.at(-2) === 'onError') return advance(def, segs.slice(0, -2).join('/'), loops);
   throw new Error(`Unbekannte Liste «${listPath}» in der Definition`);
+}
+
+/** Position nach einer Aufgabe bzw. Genehmigung mit diesem Ergebnis: in den Weg des Ergebnisses, sonst danach. */
+export function afterOutcome(def: WorkflowDefinition, execPath: string, step: TaskStep | ApprovalStep, outcome: string, loops: Loops): Position {
+  const list = (step.branches as Record<string, Step[] | undefined> | undefined)?.[outcome];
+  return list?.length ? `${execPath}/branches/${outcome}/0` : advance(def, execPath, loops);
 }
 
 /** Schleifen, deren Pfad unter `execPath` liegt, entfernen (nach dem Ende einer Schleife). */
@@ -97,7 +106,7 @@ export function dropLoopsBelow(loops: Loops, execPath: string): Loops {
 /** Durchgang und Element der innersten Schleife eines Pfads (für den Kontext eines Schritts). */
 export function loopBindings(execPath: string, loops: Loops): Record<string, unknown> {
   const vars: Record<string, unknown> = {};
-  const re = /\/items\/(\d+)(?=\/steps\/)/g;
+  const re = /(?<=\/\d+)\/items\/(\d+)(?=\/steps\/)/g;
   for (let m = re.exec(execPath); m; m = re.exec(execPath)) {
     const owner = execPath.slice(0, m.index);
     const loop = loops[owner];
