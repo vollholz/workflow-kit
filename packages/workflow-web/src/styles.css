@@ -157,3 +157,27 @@
 /* Bausteine späterer Stufen */
 .wf-unavailable { display: flex; flex-direction: column; gap: .25rem; padding: 1rem; border: 1px dashed var(--wf-line-2); border-radius: .5rem; background: var(--wf-surface); color: var(--wf-fg-2); }
 .wf-unavailable strong { color: var(--wf-fg); }
+
+/* Stufe 2: Meine Arbeit, Aufgaben, Warteschlangen, Kalender */
+.wf-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--wf-line); margin-bottom: 10px; }
+.wf-tab { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--wf-fg-2); font: inherit; cursor: pointer; }
+.wf-tab.on { color: var(--wf-fg); border-bottom-color: var(--wf-accent); font-weight: 600; }
+.wf-tab:focus-visible { outline: 2px solid var(--wf-accent); outline-offset: 2px; }
+.wf-count { display: inline-flex; gap: 3px; padding: 0 7px; border-radius: 999px; background: var(--wf-surface-2); font-size: 12px; font-weight: 600; }
+.wf-count-bad { color: var(--wf-bad); }
+.wf-count-bad::before { content: "· "; color: var(--wf-fg-3); }
+.wf-filters { align-items: flex-end; }
+.wf-work-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 420px); gap: 16px; align-items: start; }
+.wf-tasks tr.on { background: var(--wf-accent-soft); }
+.wf-task { border: 1px solid var(--wf-line); border-radius: var(--wf-radius); padding: 12px 14px; background: var(--wf-surface); display: grid; gap: 8px; }
+.wf-task h3 { margin: 0; font-size: 16px; }
+.wf-task-desc { margin: 0; white-space: pre-wrap; }
+.wf-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--wf-radius); background: var(--wf-accent-soft); margin-bottom: 8px; }
+.wf-kpis { display: flex; flex-wrap: wrap; gap: 16px; margin: 0 0 12px; }
+.wf-kpis div { min-width: 90px; }
+.wf-kpis dt { font-size: 12.5px; color: var(--wf-fg-2); }
+.wf-kpis dd { margin: 0; font-size: 20px; font-weight: 600; }
+.wf-day { min-width: 7em; font-size: 13px; color: var(--wf-fg-2); }
+.wf-assignee { display: flex; flex-wrap: wrap; gap: 0 8px; align-items: flex-end; }
+.wf-editor-form { max-width: 760px; }
+@media (max-width: 900px) { .wf-work-grid { grid-template-columns: 1fr; } }

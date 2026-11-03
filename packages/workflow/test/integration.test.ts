@@ -221,7 +221,10 @@ describe('Automation in der App «shop» (PostgreSQL)', { skip }, () => {
     assert.match(before, /shop\.orders/);
     const tables = (await admin.query(`SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'shop' AND c.relkind = 'r' AND relname LIKE 'workflow%' ORDER BY relname`)).rows;
-    assert.deepEqual(tables.map(t => t.relname), ['workflow', 'workflow_run', 'workflow_settings', 'workflow_step', 'workflow_trigger', 'workflow_usage', 'workflow_version']);
+    assert.deepEqual(tables.map(t => t.relname), [
+      'workflow', 'workflow_calendar', 'workflow_queue', 'workflow_run', 'workflow_settings', 'workflow_sla_timer', 'workflow_step', 'workflow_task',
+      'workflow_task_vote', 'workflow_trigger', 'workflow_usage', 'workflow_version',
+    ]);
     for (const t of tables) assert.ok(t.relrowsecurity && t.relforcerowsecurity, `${t.relname}: RLS`);
   });
 
@@ -236,7 +239,7 @@ describe('Automation in der App «shop» (PostgreSQL)', { skip }, () => {
     assert.equal(s.enabled, true);
     ok(await call('gus', 'PUT', '/v1/workflows/settings', { enabled: true }));
     const status = ok(await call('ada', 'GET', '/v1/workflows/status'));
-    assert.deepEqual([status.available, status.stage, status.version], [true, 1, '0.2.0']);
+    assert.deepEqual([status.available, status.stage, status.version], [true, 2, '0.3.0']);
     assert.ok(audit.some(e => e.action === 'workflow.settings_changed'));
   });
 
@@ -259,8 +262,8 @@ describe('Automation in der App «shop» (PostgreSQL)', { skip }, () => {
     assert.deepEqual([saved.revision, saved.validation.ok], [2, true]);
     const invalid = ok(await call('ada', 'POST', '/v1/workflows/validate', { definition: { ...definition, steps: [{ id: 'x', action: 'order.unknown' }] } }));
     assert.deepEqual(invalid.errors, [{ path: '/steps/0/action', message: 'Unbekannte Aktion «order.unknown»' }]);
-    const later = ok(await call('ada', 'POST', '/v1/workflows/validate', { definition: { ...definition, steps: [{ id: 't', task: { title: 'x', assignee: { field: 'a' } } }] } }));
-    assert.deepEqual([later.ok, later.stage[0].path], [false, '/steps/0/task']);
+    const later = ok(await call('ada', 'POST', '/v1/workflows/validate', { definition: { ...definition, steps: [{ id: 'w', wait: { event: { type: 'order.created' }, timeout: 'PT1H' } }] } }));
+    assert.deepEqual([later.ok, later.stage[0].path], [false, '/steps/0/wait/event']);
     const activated = ok(await call('ada', 'POST', `/v1/workflows/${cancelWf}/activate`, {}));
     assert.deepEqual([activated.state, activated.activeVersion, activated.actor], ['active', 1, { id: 'ada', kind: 'person' }]);
     const versions = ok(await call('bea', 'GET', `/v1/workflows/${cancelWf}/versions`));

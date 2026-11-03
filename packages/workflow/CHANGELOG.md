@@ -10,6 +10,55 @@ folgen die Angaben für die Entwickler der App.
 
 ## [Unveröffentlicht]
 
+## [0.3.0] – 2026-11-03
+
+### Für Nutzer
+
+- Aufgaben im Ablauf: Ein Workflow kann eine Aufgabe an eine Person, ein Team oder eine Warteschlange geben (mit
+  Formular, Ergebnis, Frist und Priorität) und wartet, bis sie erledigt ist. Danach geht er mit dem Ergebnis weiter.
+- Genehmigungen: erste Antwort, alle, Mehrheit oder nacheinander; eine Ablehnung braucht eine Begründung.
+- Warteschlangen mit Team, Sortierung und Zuweisung (selbst nehmen, reihum oder an die Person mit den wenigsten offenen
+  Aufgaben). Aufgaben lassen sich nehmen, zurücklegen, weitergeben und gesammelt zuweisen oder abbrechen.
+- Fristen zählen Arbeitszeit nach einem Kalender mit Arbeitszeiten und Feiertagen. Bei Verzug werden die Zuständigen
+  benachrichtigt; je nach Einstellung steigt die Priorität oder die Aufgabe geht an eine andere Warteschlange.
+- Aufgaben zu einem Element, das jemand nicht sehen darf, zeigen nur einen neutralen Hinweis statt des Titels.
+
+### Für den Betrieb
+
+- Neue Migration `workflow_002_tasks` (Tabellen `workflow_task`, `workflow_task_vote`, `workflow_queue`,
+  `workflow_calendar`, `workflow_sla_timer`; RLS mit `ENABLE` und `FORCE`, Worker-Policy für Fristen). Gleiche
+  Parameter wie `workflow_001_core`; braucht PostgreSQL 15 oder neuer (`ON DELETE SET NULL (queue_id)`). Ein erneuter
+  Aufruf von `workflow_subjects` ist nicht nötig.
+- Neuer Job `workflow.sla` registrieren (Nutzlast `{ tenantId, timerId }`); `tick` markiert jetzt auch überschrittene
+  Fristen und reiht dafür Jobs ein – den Worker unverändert regelmässig aufrufen.
+- Neuer optionaler Host-Port `teams` (Auswahl von Teams in der Oberfläche); ohne ihn gibt man Typ und ID von Hand ein.
+  Benachrichtigungen `task_assigned`, `approval_requested`, `sla_breached` kommen über den bestehenden Port `notify`.
+
+### Hinzugefügt
+
+- Schritte `task` und `approval` werden ausgeführt (`stageProblems` meldet sie nicht mehr): Aufgabe im Savepoint
+  anlegen, Lauf `waiting` ohne Job, `Engine.resumeAfterTask` beim Erledigen; Ergebnis unter `steps.<id>` (`outcome`,
+  `values`, `completedBy`, `completedAt`, bei Genehmigungen `votes`, `reason`); abgebrochene Aufgabe → `outcome:
+  'cancelled'`; beendeter Lauf bricht offene Aufgaben ab. Probelauf nimmt das erste Ergebnis an.
+- `Assignee` um `{ queue: <uuid> }`, Schritte um `escalation` (`notify`, `raisePriority`, `queue`) und Genehmigungen um
+  `priority` erweitert; Dauern mit Arbeitsstunden `PT8BH` (Schema-Fassung bleibt 1, nur zusätzliche Werte).
+- Kalender (`calendar.ts`): `addWorkingTime`, `isWorkingTime`, `calendarProblems`, `DEFAULT_WORK_CALENDAR`; Wochenende,
+  Feiertage, Mittag und Sommerzeit getestet. `wait` mit `BD`/`BH` rechnet nach dem Standardkalender des Mandanten.
+- Formulare serverseitig (`FormChecker`): Feldarten des Pakets und `FieldKind.valueSchema` der App.
+- Reine Regeln: `approvalOutcome`, `nextRoundRobin`, `leastLoaded`, `rotateAfter`, `raisePriority`, `actorFrom`.
+- Routen `/tasks` (Ansichten, Zähler, lesen, nehmen, zurücklegen, weitergeben, erledigen, entscheiden, abbrechen,
+  Massenaktionen), `/queues` (CRUD, Mitglieder, Teams), `/calendars` (CRUD, Vorschau einer Frist); `meta.teams`.
+- Ereignisse `task.created`, `task.assigned`, `task.decided`, `task.completed`, `task.cancelled`, `task.sla_breached`
+  mit Herkunft des Laufs; Audit für Anlegen, Zuweisungen, Entscheide, Erledigen, Abbrechen, Verzug, Warteschlangen und
+  Kalender.
+- Port `WorkflowHost.teams?` und Typ `TeamOption`; Job `WORKFLOW_JOB_SLA`; `WORKFLOW_STAGE = 2`.
+
+### Geändert
+
+- `parseDuration` liefert zusätzlich `businessHours`; `addDuration` wirft bei Arbeitsstunden (dafür `addWorkingTime`).
+- `tick` zählt die eingereihten Jobs für Zeitpläne und Fristen.
+- `meta.stepKinds` enthält `task` und `approval`.
+
 ## [0.2.0] – 2026-11-02
 
 ### Für Nutzer

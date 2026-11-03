@@ -70,6 +70,8 @@ export interface ActorConfig {
   label?: (actor: WorkflowActor) => string | undefined;
   /** Maschinen-Clients, die die angemeldete Person beim Aktivieren wählen darf (W6; nur mit `canActAs` im Backend). */
   clients?: () => Promise<WorkflowActor[]>;
+  /** Personen suchen (Weitergeben einer Aufgabe); ohne Suche gibt man die ID ein. */
+  search?: (q: string) => Promise<WorkflowActor[]>;
 }
 
 export interface WorkflowProviderProps {

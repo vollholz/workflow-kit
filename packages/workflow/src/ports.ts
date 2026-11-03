@@ -49,6 +49,11 @@ export interface TeamRef {
   id: string;
 }
 
+/** Team mit Bezeichnung (Auswahl in der Oberfläche, Port `teams`). */
+export interface TeamOption extends TeamRef {
+  label: string;
+}
+
 /** Eintrag im Audit der App. */
 export interface AuditEntry {
   /** z. B. `workflow.activated`, `task.completed`. */
@@ -128,6 +133,11 @@ export interface WorkflowHost {
   canActAs?(tx: Tx, actor: ActorRef, target: ActorRef): Promise<boolean>;
   /** Mitglieder eines Teams (Warteschlange, Genehmigung); was ein Team ist, entscheidet die App. */
   members(tx: Tx, team: TeamRef): Promise<ActorRef[]>;
+  /**
+   * Teams zur Auswahl (optional, z. B. im Editor einer Warteschlange): Suche nach Text, höchstens `limit` Treffer mit
+   * Bezeichnung. Ohne diese Methode gibt man Typ und ID eines Teams von Hand ein.
+   */
+  teams?(tx: Tx, query: { search: string; limit: number }): Promise<TeamOption[]>;
   audit(tx: Tx, entry: AuditEntry): Promise<void>;
   /** Ereignis in die Outbox der App schreiben (gleiche Transaktion). */
   emit(tx: Tx, type: string, subject: string | null, data: Record<string, unknown>): Promise<void>;
@@ -305,7 +315,8 @@ export interface JobCtx {
 /** Nutzlast der Jobs des Baukastens; `tenantId` trägt jeder Job. */
 export type WorkflowJobPayload =
   | { tenantId: string; runId: string; seq: number }
-  | { tenantId: string; triggerId: string; at: string };
+  | { tenantId: string; triggerId: string; at: string }
+  | { tenantId: string; timerId: string };
 
 export interface WorkflowJob {
   kind: string;

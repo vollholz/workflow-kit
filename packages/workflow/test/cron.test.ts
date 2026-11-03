@@ -68,7 +68,9 @@ test('unbekannte Zeitzone', () => {
 });
 
 test('Dauern mit Arbeitstagen', () => {
-  assert.deepEqual(parseDuration('P3BD'), { years: 0, months: 0, weeks: 0, days: 0, businessDays: 3, hours: 0, minutes: 0, seconds: 0 });
+  assert.deepEqual(parseDuration('P3BD'), { years: 0, months: 0, weeks: 0, days: 0, businessDays: 3, hours: 0, businessHours: 0, minutes: 0, seconds: 0 });
+  assert.deepEqual(parseDuration('PT8BH30M'), { years: 0, months: 0, weeks: 0, days: 0, businessDays: 0, hours: 0, businessHours: 8, minutes: 30, seconds: 0 });
+  assert.throws(() => addDuration(at('2026-11-02T10:00:00Z'), 'PT8BH'), /brauchen einen Kalender/);
   assert.equal(addDuration(at('2026-11-02T10:00:00Z'), 'PT4H').toISOString(), '2026-11-02T14:00:00.000Z');
   assert.equal(addDuration(at('2026-11-02T10:00:00Z'), 'P1DT30M').toISOString(), '2026-11-03T10:30:00.000Z');
   assert.equal(addDuration(at('2026-11-05T10:00:00Z'), 'P3BD').toISOString(), '2026-11-10T10:00:00.000Z', 'Do + 3 Arbeitstage = Di');

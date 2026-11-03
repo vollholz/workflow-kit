@@ -19,7 +19,7 @@ import type { ActorRef, FieldDef, JsonSchema, TeamRef } from './ports.ts';
 export const DEFINITION_SCHEMA_VERSION = 1;
 
 export type WorkflowKind = 'automation' | 'case' | 'state_model';
-/** Dauer nach ISO 8601, zusätzlich Arbeitstage `BD` (z. B. `P3BD`, `PT4H`). */
+/** Dauer nach ISO 8601, zusätzlich Arbeitstage `BD` und Arbeitsstunden `BH` (z. B. `P3BD`, `PT8BH`, `PT4H`). */
 export type Duration = string;
 
 export interface EventTrigger { event: string; filter?: Condition; includeWorkflowEvents?: boolean }
@@ -39,8 +39,16 @@ export interface OnError {
   steps?: Step[];
 }
 
-/** Wer eine Aufgabe oder Genehmigung erhält: ein Akteur, ein Team oder ein Pfad, der einen Akteur liefert. */
-export type Assignee = { actor: ActorRef } | { team: TeamRef } | { field: string };
+/**
+ * Wer eine Aufgabe oder Genehmigung erhält: ein Akteur, ein Team (`host.members`), ein Pfad, der einen Akteur liefert
+ * (z. B. `subject.values.owner`), oder eine Warteschlange (ID, Zuweisung nach ihrer Regel).
+ */
+export type Assignee = { actor: ActorRef } | { team: TeamRef } | { field: string } | { queue: string };
+
+/** Eskalation bei Verzug: weitere Akteure benachrichtigen, Priorität um eine Stufe erhöhen, an eine Warteschlange umleiten. */
+export interface Escalation { notify?: Assignee[]; raisePriority?: boolean; queue?: string }
+
+export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
 
 interface StepBase { id: string; label?: string; onError?: OnError }
 export interface ActionStep extends StepBase { action: string; input?: Record<string, unknown> }
@@ -50,11 +58,18 @@ export interface WaitStep extends StepBase {
   wait: { duration?: Duration; until?: string; event?: { type: string; condition?: Condition }; timeout?: Duration };
 }
 export interface TaskStep extends StepBase {
-  task: { title: string; description?: string; assignee: Assignee; form?: FieldDef[]; outcomes?: string[]; due?: Duration; priority?: 'low' | 'normal' | 'high' | 'urgent' };
+  task: {
+    title: string; description?: string; assignee: Assignee; form?: FieldDef[]; outcomes?: string[]; due?: Duration; priority?: TaskPriority;
+    escalation?: Escalation;
+  };
 }
 export type ApprovalMode = 'first' | 'all' | 'majority' | 'sequential';
 export interface ApprovalStep extends StepBase {
-  approval: { title: string; description?: string; approvers: Assignee[]; mode: ApprovalMode; due?: Duration; reasonOnReject?: boolean };
+  approval: {
+    title: string; description?: string; approvers: Assignee[]; mode: ApprovalMode; due?: Duration; priority?: TaskPriority;
+    /** Begründung bei Ablehnung Pflicht (Standard `true`). */
+    reasonOnReject?: boolean; escalation?: Escalation;
+  };
 }
 export interface SubflowStep extends StepBase { subflow: { workflow: string; input?: Record<string, unknown>; wait?: boolean } }
 export interface EndStep extends StepBase { end: { result: 'completed' | 'cancelled' | 'failed'; message?: string } }
@@ -162,8 +177,14 @@ export const definitionSchema: JsonSchema = {
     path: { type: 'string', pattern: '^[A-Za-z_][A-Za-z0-9_-]*(\\.[A-Za-z0-9_-]+)*$', maxLength: 300, description: 'Pfad: Teile mit «.» getrennt, z. B. «subject.values.owner»' },
     duration: {
       type: 'string',
-      pattern: '^P(?!$)(\\d+Y)?(\\d+M)?(\\d+W)?(\\d+B?D)?(T(?=\\d)(\\d+H)?(\\d+M)?(\\d+S)?)?$',
-      description: 'Dauer nach ISO 8601, z. B. «PT4H», «P2D» oder «P3BD» (Arbeitstage)',
+      pattern: '^P(?!$)(\\d+Y)?(\\d+M)?(\\d+W)?(\\d+B?D)?(T(?=\\d)(\\d+B?H)?(\\d+M)?(\\d+S)?)?$',
+      description: 'Dauer nach ISO 8601, z. B. «PT4H», «P2D», «P3BD» (Arbeitstage) oder «PT8BH» (Arbeitsstunden)',
+    },
+    uuid: { type: 'string', pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$', description: 'ID im Format UUID' },
+    priority: { enum: ['low', 'normal', 'high', 'urgent'] },
+    escalation: {
+      type: 'object', additionalProperties: false,
+      properties: { notify: { type: 'array', items: ref('assignee') }, raisePriority: { type: 'boolean' }, queue: ref('uuid') },
     },
     actor: {
       type: 'object', required: ['id', 'kind'], additionalProperties: false,
@@ -175,9 +196,12 @@ export const definitionSchema: JsonSchema = {
     },
     assignee: {
       type: 'object',
-      description: 'Zuständig: genau eines von «actor», «team» oder «field»',
-      oneOf: [{ required: ['actor'] }, { required: ['team'] }, { required: ['field'] }],
-      allOf: [variant('actor', { actor: ref('actor') }), variant('team', { team: ref('team') }), variant('field', { field: ref('path') })],
+      description: 'Zuständig: genau eines von «actor», «team», «field» oder «queue»',
+      oneOf: [{ required: ['actor'] }, { required: ['team'] }, { required: ['field'] }, { required: ['queue'] }],
+      allOf: [
+        variant('actor', { actor: ref('actor') }), variant('team', { team: ref('team') }), variant('field', { field: ref('path') }),
+        variant('queue', { queue: ref('uuid') }),
+      ],
     },
     fieldDef: {
       type: 'object', required: ['key', 'label', 'type'], additionalProperties: false,
@@ -250,7 +274,8 @@ export const definitionSchema: JsonSchema = {
       type: 'object', required: ['title', 'approvers', 'mode'], additionalProperties: false,
       properties: {
         title: text, description: { type: 'string' }, approvers: { type: 'array', minItems: 1, items: ref('assignee') },
-        mode: { enum: ['first', 'all', 'majority', 'sequential'] }, due: ref('duration'), reasonOnReject: { type: 'boolean' },
+        mode: { enum: ['first', 'all', 'majority', 'sequential'] }, due: ref('duration'), priority: ref('priority'), reasonOnReject: { type: 'boolean' },
+        escalation: ref('escalation'),
       },
     },
     step: {
@@ -288,8 +313,8 @@ export const definitionSchema: JsonSchema = {
             type: 'object', required: ['title', 'assignee'], additionalProperties: false,
             properties: {
               title: text, description: { type: 'string' }, assignee: ref('assignee'), form: { type: 'array', items: ref('fieldDef') },
-              outcomes: { type: 'array', minItems: 1, items: ref('name') }, due: ref('duration'),
-              priority: { enum: ['low', 'normal', 'high', 'urgent'] },
+              outcomes: { type: 'array', minItems: 1, maxItems: 10, items: ref('name') }, due: ref('duration'),
+              priority: ref('priority'), escalation: ref('escalation'),
             },
           },
         }),
@@ -443,6 +468,20 @@ function contentErrors(d: WorkflowDefinition, o: ValidateOptions): DefinitionErr
     }
     if ('wait' in step && step.wait.event && known.events && !known.events.has(step.wait.event.type)) {
       errors.push({ path: `${path}/wait/event/type`, message: `Unbekannter Ereignistyp «${step.wait.event.type}»` });
+    }
+    if ('task' in step) {
+      const keys = new Set<string>();
+      for (const [i, f] of (step.task.form ?? []).entries()) {
+        if (keys.has(f.key)) errors.push({ path: `${path}/task/form/${i}/key`, message: `Feld «${f.key}» kommt mehrfach vor` });
+        keys.add(f.key);
+        if (f.type === 'choice' && !f.options?.length) errors.push({ path: `${path}/task/form/${i}/options`, message: `Auswahl «${f.label}» braucht Werte («options»)` });
+      }
+      const outcomes = new Set<string>();
+      for (const [i, out] of (step.task.outcomes ?? []).entries()) {
+        if (outcomes.has(out)) errors.push({ path: `${path}/task/outcomes/${i}`, message: `Ergebnis «${out}» kommt mehrfach vor` });
+        if (out === 'cancelled') errors.push({ path: `${path}/task/outcomes/${i}`, message: 'Ergebnis «cancelled» ist für abgebrochene Aufgaben reserviert' });
+        outcomes.add(out);
+      }
     }
   }
 

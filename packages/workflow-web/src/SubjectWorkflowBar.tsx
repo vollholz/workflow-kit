@@ -1,7 +1,7 @@
 /**
  * Leiste an einem Bezug (Konzept Abschnitt 10, «Am Bezug»): Knöpfe der aktiven Workflows mit manuellem Auslöser
- * (mit Eingabeformular, falls definiert) und die letzten Läufe zu diesem Bezug. Zustandswechsel, offene Aufgaben und
- * Fälle kommen in späteren Stufen dazu.
+ * (mit Eingabeformular, falls definiert), offene Aufgaben (Stufe 2) und die letzten Läufe zu diesem Bezug.
+ * Zustandswechsel und Fälle kommen in späteren Stufen dazu.
  *
  * Regeln: Ohne verfügbares Modul zeigt die Leiste nichts. Die Liste der Knöpfe stammt aus den aktiven Versionen
  * (`GET /workflows?state=active`, danach je Workflow die aktive Version); welche davon zu diesem Bezug passen,
@@ -12,6 +12,7 @@ import { useId, useState } from 'react';
 import { missingRequired, FieldForm } from './forms.tsx';
 import { useRuns, useStartRun, useWorkflows, useWorkflowStatus, wfKeys, wfRequest } from './api.ts';
 import { useWorkflow, type WorkflowSubjectRef } from './provider.tsx';
+import { SubjectTasks } from './tasks.tsx';
 import type { FieldDefJson, VersionJson, WorkflowSummary } from './types.ts';
 import { Badge, fmtDateTime, RUN_STATE_LABEL, runTone } from './ui.tsx';
 
@@ -23,11 +24,13 @@ export interface SubjectWorkflowBarProps {
   onOpenRun?: (runId: string) => void;
   /** Anzahl der letzten Läufe (Standard 5). */
   recent?: number;
+  /** Aufgabe öffnen (z. B. «Meine Arbeit» mit dieser Aufgabe); ohne Angabe nur Anzeige. */
+  onOpenTask?: (taskId: string) => void;
 }
 
 interface ManualWorkflow { workflow: WorkflowSummary; label: string; form: FieldDefJson[] }
 
-export function SubjectWorkflowBar({ subject, filter, onOpenRun, recent = 5 }: SubjectWorkflowBarProps) {
+export function SubjectWorkflowBar({ subject, filter, onOpenRun, onOpenTask, recent = 5 }: SubjectWorkflowBarProps) {
   const w = useWorkflow();
   const { ui } = w;
   const id = useId();
@@ -71,6 +74,8 @@ export function SubjectWorkflowBar({ subject, filter, onOpenRun, recent = 5 }: S
       ) : active.isPending || versions.some(v => v.isPending) ? null : <p className="wf-muted wf-small">Kein Workflow lässt sich hier von Hand starten.</p>}
       <div role="status" aria-live="polite" className="wf-ok">{done}</div>
       {start.isError && !open ? <ui.ErrorBox error={start.error} /> : null}
+      <h4>Offene Aufgaben</h4>
+      <SubjectTasks subject={subject} onOpenTask={onOpenTask} />
       <h4>Letzte Läufe</h4>
       {runs.isPending ? <ui.Loading label="Läufe werden geladen …" /> : runs.isError ? <ui.ErrorBox error={runs.error} /> : items.length ? (
         <ul className="wf-plain" aria-label="Letzte Läufe">

@@ -2,8 +2,10 @@
  * Einstieg `@vollholz/workflow`: `workflow(options)` steckt den Baukasten aus den Ports der App zusammen.
  *
  * Stufe 1 (Automation): Engine (`engine.ts`) mit `dispatch`, Jobs `workflow.step` und `workflow.start`, `tick` für
- * Zeitpläne, Migrationen (`workflow_001_core.sql`) und die REST-Routen (`routes.ts`). `checkTransition` erlaubt noch
- * jeden Wechsel (Zustandsmodelle folgen in Stufe 4). Die Optionen werden beim Zusammenstecken vollständig geprüft
+ * Zeitpläne, Migrationen (`workflow_001_core.sql`) und die REST-Routen (`routes.ts`). Stufe 2 (Aufgaben und
+ * Warteschlangen): Schritte `task` und `approval` (`tasks.ts`), Fristen nach Kalender (`calendar.ts`) mit Job
+ * `workflow.sla`, Formulare (`forms.ts`), Migration `workflow_002_tasks.sql` und Routen `/tasks`, `/queues`,
+ * `/calendars` (`task-routes.ts`). `checkTransition` erlaubt noch jeden Wechsel (Zustandsmodelle folgen in Stufe 4). Die Optionen werden beim Zusammenstecken vollständig geprüft
  * (Fehler der Einbindung als `Error`).
  *
  * Regel: Das Paket ist app-agnostisch. Es importiert nichts aus einer App oder einem App-Paket; alles Fachliche kommt
@@ -25,7 +27,13 @@ export * from './definition.ts';
 export * from './expressions.ts';
 export { workflowPermissions, type WorkflowPermission, type WorkflowPermissionName } from './permissions.ts';
 export { WORKFLOW_EVENT_TYPES, type WorkflowEventType, type WorkflowEventTypeName } from './events.ts';
-export { CronError, addDuration, isValidTimeZone, nextCronTime, parseCron, parseDuration, type CronSchedule, type DurationParts } from './cron.ts';
+export {
+  CronError, addDuration, isBusinessDuration, isValidTimeZone, nextCronTime, parseCron, parseDuration, type CronSchedule, type DurationParts,
+} from './cron.ts';
+export {
+  DEFAULT_WORK_CALENDAR, WEEKDAY_KEYS, addWorkingTime, calendarProblems, isWorkingTime,
+  type Holiday, type WeekdayKey, type WorkCalendar, type WorkWeek,
+} from './calendar.ts';
 export { workflowMigrations, WORKFLOW_MIGRATIONS_DIR } from './migrations.ts';
 export {
   DEFAULT_RETRY, WORKFLOW_JOB_START, WORKFLOW_JOB_STEP, StepFailure, chainDecision, definitionChecksum, effectiveLimits, foreachLimit,
@@ -33,11 +41,17 @@ export {
   type DryRunResult, type DryRunStep, type RunState, type RunTrigger, type StepError, type TenantSettings, type TriggerKind,
 } from './engine.ts';
 export type { WorkflowMeta, WorkflowStatus } from './routes.ts';
+export type { TaskActions } from './task-routes.ts';
+export { FormChecker, type FormError, type FormResult } from './forms.ts';
+export {
+  ACTIVE_STATES, HIDDEN_TITLE, PRIORITIES, WORKFLOW_JOB_SLA, actorFrom, approvalOutcome, leastLoaded, nextRoundRobin, raisePriority, rotateAfter,
+  type Decision, type QueueAssignment, type QueueSort, type TaskKind, type TaskState,
+} from './tasks.ts';
 
 /** Version des Pakets (gleich wie in package.json, geprüft im Test). */
-export const WORKFLOW_PACKAGE_VERSION = '0.2.0';
+export const WORKFLOW_PACKAGE_VERSION = '0.3.0';
 /** Ausbaustufe nach Konzept Abschnitt 13. */
-export const WORKFLOW_STAGE = 1;
+export const WORKFLOW_STAGE = 2;
 
 /** Vorgaben für die Grenzen je Mandant (Konzept 4.9). */
 export const DEFAULT_LIMITS: Readonly<WorkflowLimits> = Object.freeze({
@@ -81,11 +95,12 @@ export interface Workflow {
   /** Ereignis der App prüfen; in derselben Transaktion wie `emit` (W3). */
   dispatch: Dispatch;
   checkTransition: CheckTransition;
-  /** Job-Handler `workflow.step` und `workflow.start` für die Job-Warteschlange der App. */
+  /** Job-Handler `workflow.step`, `workflow.start` und `workflow.sla` für die Job-Warteschlange der App. */
   jobs: WorkflowJob[];
   /**
-   * Fällige Zeitpläne starten (der Worker der App ruft das regelmässig auf, z. B. jede Minute); liefert die Zahl der
-   * eingereihten Starts. Mit der Worker-Rolle über alle Mandanten, mit der Laufzeit-Rolle für den Mandanten der `tx`.
+   * Fällige Zeitpläne starten und überschrittene Fristen markieren (der Worker der App ruft das regelmässig auf, z. B.
+   * jede Minute); liefert die Zahl der eingereihten Jobs (`workflow.start` und `workflow.sla`). Mit der Worker-Rolle über
+   * alle Mandanten, mit der Laufzeit-Rolle für den Mandanten der `tx`.
    */
   tick(tx: Tx, o?: { limit?: number }): Promise<number>;
   /** Zwischenspeicher der Auslöser verwerfen (alle oder ein Mandant), z. B. nach `LISTEN workflow_triggers`. */
@@ -148,7 +163,7 @@ export function workflow(o: WorkflowOptions): Workflow {
   const validate = (definition: unknown) => validateDefinition(definition, { known, maxForeach: limits.foreachItems });
   const engine = new Engine({
     schema: o.schema, host: o.host, subjects: o.subjects, actions: o.actions, limits, enabled,
-    clock: o.clock ?? (() => new Date()), retryDelayMs: o.retryDelayMs ?? 30_000, triggerCacheMs: o.triggerCacheMs ?? 10_000,
+    clock: o.clock ?? (() => new Date()), retryDelayMs: o.retryDelayMs ?? 30_000, triggerCacheMs: o.triggerCacheMs ?? 10_000, fields: o.fields ?? [],
   });
 
   const plugin: FastifyPluginAsync = async app => {

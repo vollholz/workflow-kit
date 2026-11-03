@@ -1,7 +1,8 @@
 /**
  * Zugriff auf die REST-API von `@vollholz/workflow` (Stufe 1) als Hooks über TanStack Query: Status, Meta,
  * Einstellungen, Workflows (Entwurf mit `If-Match`), Prüfen, Aktivieren/Pausieren/Archivieren, Versionen, manueller
- * Start, Probelauf, Läufe mit Cursor, Lauf mit Schritten, Vorfälle.
+ * Start, Probelauf, Läufe mit Cursor, Lauf mit Schritten, Vorfälle; Stufe 2: Aufgaben (Ansichten, Zähler, Aktionen,
+ * Massenaktionen), Warteschlangen, Teams, Kalender.
  *
  * Regeln: Pfade immer unter `prefix` des Providers; Fehler als `WorkflowApiError` (Problem Details oder `{ code,
  * message }` der App); nach jeder Änderung werden die betroffenen Abfragen neu geladen (`wfKeys`).
@@ -9,7 +10,8 @@
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useWorkflow, type WorkflowContextValue, type WorkflowScopeRef, type WorkflowSubjectRef } from './provider.tsx';
 import type {
-  ActorRefJson, DryRunJson, RunDetailJson, RunJson, RunPage, RunState, ValidationJson, VersionJson, WorkflowDefinition, WorkflowDetail,
+  ActorRefJson, BulkResultJson, CalendarBody, CalendarJson, MemberJson, QueueBody, QueueJson, TaskCountsJson, TaskDetailJson, TaskKind, TaskPage, TaskSort,
+  TaskView, TeamOptionJson, DryRunJson, RunDetailJson, RunJson, RunPage, RunState, ValidationJson, VersionJson, WorkflowDefinition, WorkflowDetail,
   WorkflowLimitsJson, WorkflowMetaJson, WorkflowSettingsJson, WorkflowState, WorkflowStatusJson, WorkflowSummary,
 } from './types.ts';
 import { WorkflowApiError } from './ui.tsx';
@@ -29,7 +31,22 @@ export const wfKeys = {
   runs: (f: RunFilter = {}) => ['workflow', 'runs', f] as const,
   allRuns: ['workflow', 'runs'] as const,
   run: (id: string) => ['workflow', 'run', id] as const,
+  tasks: (f: TaskFilter = {}) => ['workflow', 'tasks', f] as const,
+  allTasks: ['workflow', 'tasks'] as const,
+  task: (id: string) => ['workflow', 'task', id] as const,
+  taskCounts: ['workflow', 'task-counts'] as const,
+  queues: ['workflow', 'queues'] as const,
+  queue: (id: string) => ['workflow', 'queue', id] as const,
+  queueMembers: (id: string) => ['workflow', 'queue-members', id] as const,
+  teams: (q: string) => ['workflow', 'teams', q] as const,
+  calendars: ['workflow', 'calendars'] as const,
+  calendar: (id: string) => ['workflow', 'calendar', id] as const,
 };
+
+export interface TaskFilter {
+  view?: TaskView; state?: 'active' | 'open' | 'in_progress' | 'done' | 'cancelled' | 'any'; queueId?: string; kind?: TaskKind;
+  subjectType?: string; subjectId?: string; overdue?: boolean; sort?: TaskSort; limit?: number; offset?: number;
+}
 
 export interface WorkflowListFilter { state?: WorkflowState; scopeType?: string; scopeId?: string }
 export interface RunFilter { workflowId?: string; subjectType?: string; subjectId?: string; state?: RunState; limit?: number }
@@ -244,5 +261,162 @@ export function useIncidentAction() {
   return useMutation({
     mutationFn: (b: { runId: string; action: IncidentAction }) => wfRequest<RunJson>(w, 'POST', `/workflow-runs/${enc(b.runId)}/${b.action}`),
     onSuccess: (_r, b) => { void qc.invalidateQueries({ queryKey: wfKeys.run(b.runId) }); void qc.invalidateQueries({ queryKey: wfKeys.allRuns }); },
+  });
+}
+
+// ---------------------------------------------------------------- Aufgaben (Stufe 2)
+
+/** Aufgaben einer Ansicht (`mine`, `team`, `all`) mit Filter und Sortierung. */
+export function useTasks(filter: TaskFilter = {}, enabled = true) {
+  const w = useWorkflow();
+  return useQuery({
+    queryKey: wfKeys.tasks(filter), enabled, placeholderData: keepPreviousData,
+    queryFn: ({ signal }) => wfRequest<TaskPage>(w, 'GET', `/tasks${qs({ ...filter, overdue: filter.overdue ? 'true' : undefined })}`, { signal }),
+  });
+}
+
+/**
+ * Zähler offen/überfällig für die Navigation der App («Meine Arbeit»). Fragt nur, wenn das Modul verfügbar ist;
+ * `refetchInterval` (Standard 60 s) hält ihn ohne Neuladen aktuell.
+ */
+export function useTaskCounts(o: { enabled?: boolean; refetchInterval?: number | false } = {}) {
+  const w = useWorkflow();
+  const status = useWorkflowStatus();
+  return useQuery({
+    queryKey: wfKeys.taskCounts, enabled: (o.enabled ?? true) && !!status.data?.available, refetchInterval: o.refetchInterval ?? 60_000,
+    queryFn: ({ signal }) => wfRequest<TaskCountsJson>(w, 'GET', '/tasks/counts', { signal }),
+  });
+}
+
+export function useTask(id: string | null | undefined) {
+  const w = useWorkflow();
+  return useQuery({
+    queryKey: wfKeys.task(id ?? ''), enabled: !!id,
+    queryFn: ({ signal }) => wfRequest<TaskDetailJson>(w, 'GET', `/tasks/${enc(id!)}`, { signal }),
+  });
+}
+
+export type TaskAction =
+  | { action: 'take' } | { action: 'release' }
+  | { action: 'assign'; assignee?: ActorRefJson | null; queueId?: string | null }
+  | { action: 'complete'; outcome?: string; values: Record<string, unknown> }
+  | { action: 'decide'; decision: 'approved' | 'rejected'; reason?: string | null }
+  | { action: 'cancel'; reason?: string | null };
+
+/** Aktion auf einer Aufgabe (mit `If-Match`, wenn `revision` bekannt ist); lädt Listen, Zähler und Läufe neu. */
+export function useTaskAction(id: string) {
+  const w = useWorkflow();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ revision, ...a }: TaskAction & { revision?: number }) => {
+      const { action, ...body } = a;
+      return wfRequest<TaskDetailJson>(w, 'POST', `/tasks/${enc(id)}/${action}`, { body, headers: revision !== undefined ? ifMatch(revision) : {} });
+    },
+    onSuccess: t => {
+      qc.setQueryData(wfKeys.task(id), t);
+      void qc.invalidateQueries({ queryKey: wfKeys.allTasks });
+      void qc.invalidateQueries({ queryKey: wfKeys.taskCounts });
+      void qc.invalidateQueries({ queryKey: wfKeys.queues });
+      void qc.invalidateQueries({ queryKey: wfKeys.allRuns });
+    },
+  });
+}
+
+/** Massenaktion (zuweisen oder abbrechen, Recht `task:assign`). */
+export function useBulkTasks() {
+  const w = useWorkflow();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (b: { action: 'assign' | 'cancel'; ids: string[]; assignee?: ActorRefJson | null; queueId?: string | null; reason?: string | null }) =>
+      wfRequest<BulkResultJson>(w, 'POST', '/tasks/bulk', { body: b }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: wfKeys.all }); },
+  });
+}
+
+// ---------------------------------------------------------------- Warteschlangen und Kalender
+
+export function useQueues(enabled = true) {
+  const w = useWorkflow();
+  return useQuery({ queryKey: wfKeys.queues, enabled, queryFn: ({ signal }) => wfRequest<{ items: QueueJson[] }>(w, 'GET', '/queues', { signal }) });
+}
+
+export function useQueue(id: string | null | undefined) {
+  const w = useWorkflow();
+  return useQuery({ queryKey: wfKeys.queue(id ?? ''), enabled: !!id, queryFn: ({ signal }) => wfRequest<QueueJson>(w, 'GET', `/queues/${enc(id!)}`, { signal }) });
+}
+
+export function useQueueMembers(id: string | null | undefined) {
+  const w = useWorkflow();
+  return useQuery({
+    queryKey: wfKeys.queueMembers(id ?? ''), enabled: !!id,
+    queryFn: ({ signal }) => wfRequest<{ items: MemberJson[] }>(w, 'GET', `/queues/${enc(id!)}/members`, { signal }),
+  });
+}
+
+/** Teams zur Auswahl (Port `teams` der App); `available: false`, wenn die App keine anbietet. */
+export function useTeams(q: string, enabled = true) {
+  const w = useWorkflow();
+  return useQuery({
+    queryKey: wfKeys.teams(q), enabled, staleTime: 60_000, placeholderData: keepPreviousData,
+    queryFn: ({ signal }) => wfRequest<{ available: boolean; items: TeamOptionJson[] }>(w, 'GET', `/queues/teams${qs({ q })}`, { signal }),
+  });
+}
+
+/** Warteschlange anlegen (ohne `id`) oder ändern (mit `id` und `revision`). */
+export function useSaveQueue() {
+  const w = useWorkflow();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, revision, ...body }: QueueBody & { id?: string; revision?: number }) =>
+      id ? wfRequest<QueueJson>(w, 'PUT', `/queues/${enc(id)}`, { body, headers: ifMatch(revision ?? 0) }) : wfRequest<QueueJson>(w, 'POST', '/queues', { body }),
+    onSuccess: q => { qc.setQueryData(wfKeys.queue(q.id), q); void qc.invalidateQueries({ queryKey: wfKeys.queues }); },
+  });
+}
+
+export function useDeleteQueue() {
+  const w = useWorkflow();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (b: { id: string; revision: number }) => wfRequest<void>(w, 'DELETE', `/queues/${enc(b.id)}`, { headers: ifMatch(b.revision) }),
+    onSuccess: (_r, b) => { qc.removeQueries({ queryKey: wfKeys.queue(b.id) }); void qc.invalidateQueries({ queryKey: wfKeys.queues }); },
+  });
+}
+
+export function useCalendars(enabled = true) {
+  const w = useWorkflow();
+  return useQuery({ queryKey: wfKeys.calendars, enabled, queryFn: ({ signal }) => wfRequest<{ items: CalendarJson[] }>(w, 'GET', '/calendars', { signal }) });
+}
+
+export function useCalendar(id: string | null | undefined) {
+  const w = useWorkflow();
+  return useQuery({ queryKey: wfKeys.calendar(id ?? ''), enabled: !!id, queryFn: ({ signal }) => wfRequest<CalendarJson>(w, 'GET', `/calendars/${enc(id!)}`, { signal }) });
+}
+
+/** Kalender anlegen (ohne `id`) oder ändern (mit `id` und `revision`). */
+export function useSaveCalendar() {
+  const w = useWorkflow();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, revision, ...body }: CalendarBody & { id?: string; revision?: number }) =>
+      id ? wfRequest<CalendarJson>(w, 'PUT', `/calendars/${enc(id)}`, { body, headers: ifMatch(revision ?? 0) }) : wfRequest<CalendarJson>(w, 'POST', '/calendars', { body }),
+    onSuccess: c => { qc.setQueryData(wfKeys.calendar(c.id), c); void qc.invalidateQueries({ queryKey: wfKeys.calendars }); },
+  });
+}
+
+export function useDeleteCalendar() {
+  const w = useWorkflow();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (b: { id: string; revision: number }) => wfRequest<void>(w, 'DELETE', `/calendars/${enc(b.id)}`, { headers: ifMatch(b.revision) }),
+    onSuccess: (_r, b) => { qc.removeQueries({ queryKey: wfKeys.calendar(b.id) }); void qc.invalidateQueries({ queryKey: wfKeys.calendars }); },
+  });
+}
+
+/** Frist nach Kalender ausrechnen (Vorschau im Editor). */
+export function useCalendarPreview() {
+  const w = useWorkflow();
+  return useMutation({
+    mutationFn: (b: { duration: string; from?: string; calendarId?: string; calendar?: Pick<CalendarJson, 'timezone' | 'week' | 'holidays'> }) =>
+      wfRequest<{ from: string; dueAt: string }>(w, 'POST', '/calendars/preview', { body: b }),
   });
 }
