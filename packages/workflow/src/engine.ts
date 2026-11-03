@@ -18,18 +18,27 @@
  *   `incident` ohne Job und ohne Ereignis (damit sich die Kette nicht über Ereignisse fortsetzt).
  * - Die Engine liest an der Lesesicht der Läufe vorbei (`workflow.engine = on`, lokal und danach zurückgesetzt).
  * - Probelauf: gleiche Schrittlogik, Aktionen nur über `dryRun`, alles in einem Savepoint, der zurückgerollt wird; weder
- *   `emit` noch `audit` noch Jobs.
+ *   `emit` noch `audit` noch Jobs. Aufgaben und Genehmigungen nimmt der Probelauf mit dem ersten Ergebnis als erledigt an.
+ * - Aufgaben (Stufe 2, `tasks.ts`): Ein Schritt `task` oder `approval` legt die Aufgabe im Savepoint an und setzt den
+ *   Lauf auf `waiting` ohne `wake_at` und ohne Job; `resumeAfterTask` setzt ihn beim Erledigen fort. Jobs für einen so
+ *   wartenden Lauf werden ignoriert. Endet ein Lauf, bricht `finish` seine offenen Aufgaben ab.
+ * - Warten mit Arbeitszeit (`P2BD`, `PT4BH`) rechnet nach dem Standardkalender des Mandanten (`calendar.ts`).
+ * - Der Mandant wird je `Tx`-Objekt zwischengespeichert: Die App gibt je Transaktion ein eigenes `Tx` (kein wiederverwendetes
+ *   Verbindungsobjekt eines Pools).
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { Ajv, type ValidateFunction } from 'ajv';
-import { addDuration, nextCronTime } from './cron.ts';
+import { addWorkingTime } from './calendar.ts';
+import { addDuration, isBusinessDuration, nextCronTime } from './cron.ts';
 import { advance, END, END_FAILED, enter, loopBindings, stepAt, dropLoopsBelow, type Loops, type Position } from './cursor.ts';
-import type { OnError, Step, WorkflowDefinition } from './definition.ts';
+import type { ApprovalStep, OnError, Step, TaskStep, WorkflowDefinition } from './definition.ts';
 import { evaluateCondition, resolvePath, resolveValue, type Condition, type ExpressionContext } from './expressions.ts';
+import { FormChecker } from './forms.ts';
 import type {
-  ActionContext, ActorRef, Causation, DispatchOptions, JobCtx, ScopeRef, SubjectRef, Tx, WorkflowAction, WorkflowEvent,
+  ActionContext, ActorRef, Causation, DispatchOptions, FieldKind, JobCtx, ScopeRef, SubjectRef, Tx, WorkflowAction, WorkflowEvent,
   WorkflowHost, WorkflowJob, WorkflowLimits, WorkflowSubject,
 } from './ports.ts';
+import { Tasks, WORKFLOW_JOB_SLA } from './tasks.ts';
 
 /** Kinds der Jobs des Baukastens. */
 export const WORKFLOW_JOB_STEP = 'workflow.step';
@@ -56,6 +65,8 @@ export interface EngineOptions {
   retryDelayMs: number;
   /** Lebensdauer des Zwischenspeichers der Auslöser je Mandant. */
   triggerCacheMs: number;
+  /** Feldarten der App für Aufgabenformulare. */
+  fields?: FieldKind[];
 }
 
 export interface WorkflowRow {
@@ -201,10 +212,8 @@ export function stageProblems(def: WorkflowDefinition): { path: string; message:
   const walk = (list: Step[] | undefined, base: string) => {
     for (const [i, s] of (list ?? []).entries()) {
       const p = `${base}/${i}`;
-      if ('task' in s) out.push({ path: `${p}/task`, message: 'Aufgaben folgen in Stufe 2' });
-      if ('approval' in s) out.push({ path: `${p}/approval`, message: 'Genehmigungen folgen in Stufe 2' });
       if ('subflow' in s) out.push({ path: `${p}/subflow`, message: 'Unterabläufe folgen in Stufe 3' });
-      if ('wait' in s && s.wait.event) out.push({ path: `${p}/wait/event`, message: 'Warten auf ein Ereignis folgt in Stufe 2 (Warten auf Dauer oder Zeitpunkt geht)' });
+      if ('wait' in s && s.wait.event) out.push({ path: `${p}/wait/event`, message: 'Warten auf ein Ereignis folgt in einer späteren Stufe (Warten auf Dauer oder Zeitpunkt geht)' });
       if ('if' in s) { walk(s.then, `${p}/then`); walk(s.else, `${p}/else`); }
       if ('foreach' in s) walk(s.steps, `${p}/steps`);
       walk(s.onError?.steps, `${p}/onError/steps`);
@@ -234,6 +243,8 @@ interface StepResult {
   summary?: string;
   allowed?: boolean;
   missing?: string[];
+  /** Schritt hat eine Aufgabe angelegt: Lauf wartet, bis sie erledigt ist. */
+  waitTask?: string;
 }
 
 interface StartArgs {
@@ -262,6 +273,7 @@ export class Engine {
   private readonly tenants = new WeakMap<object, string | null>();
   private readonly causes = new WeakMap<object, Causation[]>();
   readonly jobs: WorkflowJob[];
+  readonly tasks: Tasks;
 
   constructor(o: EngineOptions) {
     this.o = o;
@@ -282,9 +294,11 @@ export class Engine {
       try { this.inputValidators.set(a.key, ajv.compile(a.input)); }
       catch (e) { throw new Error(`workflow: Aktion «${a.key}» hat kein gültiges Eingabe-Schema (${e instanceof Error ? e.message : String(e)})`); }
     }
+    this.tasks = new Tasks(this, new FormChecker(o.fields ?? []));
     this.jobs = [
       { kind: WORKFLOW_JOB_STEP, handler: ctx => this.stepJob(ctx) },
       { kind: WORKFLOW_JOB_START, handler: ctx => this.startJob(ctx) },
+      { kind: WORKFLOW_JOB_SLA, handler: ctx => this.slaJob(ctx) },
     ];
   }
 
@@ -317,7 +331,8 @@ export class Engine {
 
   private currentCause(tx: Tx): Causation | null { return this.causes.get(tx)?.at(-1) ?? null; }
 
-  private async emitFor(tx: Tx, run: Pick<RunRow, 'id' | 'chain_depth' | 'subject_id'>, type: string, data: Record<string, unknown>): Promise<void> {
+  /** Ereignis aus einem Lauf (Herkunft für den Schleifenschutz). */
+  async emitFor(tx: Tx, run: Pick<RunRow, 'id' | 'chain_depth' | 'subject_id'>, type: string, data: Record<string, unknown>): Promise<void> {
     await this.withCausation(tx, { runId: run.id, depth: run.chain_depth }, () => this.o.host.emit(tx, type, run.subject_id, data));
   }
 
@@ -516,6 +531,8 @@ export class Engine {
         await this.o.host.jobs.enqueue(tx, WORKFLOW_JOB_START, { tenantId: r.tenant_id, triggerId: r.id, at }, { dedupeKey: `workflow:start:${r.id}:${at}` });
         started++;
       }
+      // Fristen der Aufgaben: fällige markieren, Eskalation als Job
+      started += await this.asEngine(tx, () => this.tasks.tickSla(tx, o));
       return started;
     } finally {
       await tx.query(`SELECT set_config('workflow.sched', $1, true)`, [prev]).catch(() => {});
@@ -583,6 +600,7 @@ export class Engine {
     await this.asEngine(tx, async () => {
       const run = (await tx.query<RunRow>(`SELECT * FROM ${this.t('workflow_run')} WHERE id = $1 FOR UPDATE`, [p.runId])).rows[0];
       if (!run || run.seq !== p.seq || (run.state !== 'running' && run.state !== 'waiting')) return; // erledigt, doppelt oder veraltet
+      if (run.state === 'waiting' && !run.wake_at) return; // wartet auf eine Aufgabe; weiter geht es beim Erledigen
       const settings = await this.settings(tx);
       if (!settings.enabled) {
         await this.finish(tx, run, 'cancelled', { code: 'tenant-disabled', message: 'Workflows sind im Mandanten ausgeschaltet' });
@@ -610,6 +628,7 @@ export class Engine {
 
   private async finish(tx: Tx, run: RunRow, state: 'completed' | 'failed' | 'cancelled', error: StepError | null): Promise<void> {
     await this.update(tx, run, { state, cursor: null, wake_at: null, error: error ?? run.error, finished_at: this.now() });
+    await this.tasks.cancelForRun(tx, run.id, state === 'completed' ? 'Lauf beendet' : state === 'cancelled' ? 'Lauf abgebrochen' : 'Lauf fehlgeschlagen');
     const type = state === 'completed' ? 'workflow.run_completed' : 'workflow.run_failed';
     await this.emitFor(tx, run, type, { workflowId: run.workflow_id, version: run.version, runId: run.id, state, error });
   }
@@ -638,6 +657,41 @@ export class Engine {
     const s = this.subjects.get(type);
     const snap = s ? await s.load(tx, id) : null;
     return snap ? { type, ...snap } : { type, id };
+  }
+
+  /** Bezug als Kontext für Ausdrücke (an der Lesesicht vorbei). */
+  subjectContextOf(tx: Tx, type: string | null, id: string | null): Promise<Record<string, unknown> | null> {
+    return this.asEngine(tx, () => this.subjectContext(tx, type, id));
+  }
+
+  /** Angemeldeter Bezugstyp. */
+  subjectType(type: string): WorkflowSubject | undefined { return this.subjects.get(type); }
+
+  /** Fehler eines Schritts, der sofort zum Vorfall führt (z. B. niemand zuständig). */
+  failure(code: string, message: string): StepFailure { return new StepFailure(code, message, { incident: true }); }
+
+  /**
+   * Wartenden Lauf nach einer erledigten Aufgabe fortsetzen: nur, wenn er noch genau an diesem Schritt mit dieser
+   * Folgenummer wartet. Ergebnis unter `steps.<id>`, Protokoll des Schritts, nächster Job (wieder als Workflow-Akteur).
+   */
+  async resumeAfterTask(tx: Tx, at: { runId: string; path: string; seq: number }, output: Record<string, unknown>): Promise<boolean> {
+    return this.asEngine(tx, async () => {
+      const run = (await tx.query<RunRow>(`SELECT * FROM ${this.t('workflow_run')} WHERE id = $1 FOR UPDATE`, [at.runId])).rows[0];
+      if (!run || run.state !== 'waiting' || run.wake_at || run.cursor !== at.path || run.seq !== at.seq) return false;
+      const def = await this.definition(tx, run.workflow_id, run.version);
+      const step = stepAt(def, at.path);
+      if (!step) return false;
+      const attempt = ((await tx.query<{ n: number }>(`SELECT coalesce(max(attempt), 0)::int AS n FROM ${this.t('workflow_step')} WHERE run_id = $1 AND path = $2`,
+        [run.id, at.path])).rows[0]?.n ?? 0) + 1;
+      await this.logStep(tx, run, at.path, step, attempt, 'completed', { output, startedAt: this.now() });
+      await this.continueAt(tx, run, advance(def, at.path, run.loops), { attempts: 0, outputs: { ...run.outputs, [step.id]: output } }, run.tenant_id);
+      return true;
+    });
+  }
+
+  private async slaJob(ctx: JobCtx): Promise<void> {
+    if (!this.o.enabled) throw this.o.host.error(503, 'module-disabled', 'Workflows sind in dieser Umgebung ausgeschaltet');
+    await this.tasks.slaJob(ctx);
   }
 
   private expressionContext(run: Pick<RunRow, 'trigger' | 'variables' | 'outputs' | 'loops' | 'input' | 'id' | 'workflow_id' | 'version'>, cursor: string,
@@ -680,7 +734,7 @@ export class Engine {
 
     let result: StepResult;
     try {
-      result = await this.runStep(tx, def, step, cursor, run, ctx, { actor, scope, attempt, limits, dry: false, log });
+      result = await this.runStep(tx, def, step, cursor, run, ctx, { actor, scope, attempt, limits, dry: false, log, full: run });
     } catch (e) {
       const f = e instanceof StepFailure ? e : new StepFailure('action-failed', e instanceof Error ? e.message : String(e), {
         retryable: !(e !== null && typeof e === 'object' && (e as { retryable?: unknown }).retryable === false),
@@ -689,6 +743,12 @@ export class Engine {
       await this.logStep(tx, run, cursor, step, attempt, 'failed', { error, log, startedAt });
       await this.update(tx, run, { step_count: run.step_count + 1 });
       await this.handleFailure(tx, run, def, step, cursor, f, error, tenantId);
+      return;
+    }
+    if (result.waitTask) {
+      // Aufgabe angelegt: Lauf wartet ohne Job, bis sie erledigt ist (resumeAfterTask)
+      await this.logStep(tx, run, cursor, step, attempt, 'waiting', { input: result.input, output: result.output, log, startedAt });
+      await this.update(tx, run, { step_count: run.step_count + 1, attempts: 0, state: 'waiting', seq: run.seq + 1, wake_at: null });
       return;
     }
     await this.logStep(tx, run, cursor, step, attempt, 'completed', { input: result.input, output: result.output, log, startedAt });
@@ -750,7 +810,7 @@ export class Engine {
     return { type: r?.scope_type ?? 'tenant', id: r?.scope_id ?? '' };
   }
 
-  private async logStep(tx: Tx, run: Pick<RunRow, 'id' | 'tenant_id'>, path: string, step: Step, attempt: number, state: 'completed' | 'failed' | 'skipped',
+  private async logStep(tx: Tx, run: Pick<RunRow, 'id' | 'tenant_id'>, path: string, step: Step, attempt: number, state: 'completed' | 'failed' | 'skipped' | 'waiting',
     o: { input?: unknown; output?: unknown; error?: StepError; log?: string[]; startedAt: Date }): Promise<void> {
     await tx.query(
       `INSERT INTO ${this.t('workflow_step')} (tenant_id, id, run_id, path, step_id, kind, attempt, state, input, output, log, error, started_at, finished_at)
@@ -763,7 +823,7 @@ export class Engine {
   /** Logik eines Schritts, gemeinsam für Ausführung und Probelauf. */
   private async runStep(tx: Tx, def: WorkflowDefinition, step: Step, cursor: string,
     run: Pick<RunRow, 'id' | 'workflow_id' | 'version' | 'variables' | 'loops' | 'subject_type' | 'subject_id' | 'chain_depth'>, ctx: ExpressionContext,
-    o: { actor: ActorRef; scope: ScopeRef; attempt: number; limits: WorkflowLimits; dry: boolean; log: string[] }): Promise<StepResult> {
+    o: { actor: ActorRef; scope: ScopeRef; attempt: number; limits: WorkflowLimits; dry: boolean; log: string[]; full?: RunRow }): Promise<StepResult> {
     const loops = run.loops;
     const expr = <T>(fn: () => T): T => {
       try { return fn(); } catch (e) { throw new StepFailure('expression', e instanceof Error ? e.message : String(e)); }
@@ -829,7 +889,11 @@ export class Engine {
     if ('wait' in step) {
       if (step.wait.event) throw new StepFailure('unsupported', 'Warten auf ein Ereignis folgt in Stufe 2');
       let until: Date;
-      if (step.wait.duration) until = expr(() => addDuration(this.now(), step.wait.duration!));
+      if (step.wait.duration && isBusinessDuration(step.wait.duration)) {
+        // Arbeitszeit nach dem Standardkalender des Mandanten (Feiertage)
+        const cal = await this.tasks.calendar(tx, null);
+        until = expr(() => addWorkingTime(cal.calendar, this.now(), step.wait.duration!));
+      } else if (step.wait.duration) until = expr(() => addDuration(this.now(), step.wait.duration!));
       else {
         const v = expr(() => resolveValue(step.wait.until, ctx));
         until = v instanceof Date ? v : new Date(typeof v === 'string' || typeof v === 'number' ? v : NaN);
@@ -847,6 +911,31 @@ export class Engine {
     if ('end' in step) {
       const message = step.end.message ? expr(() => String(resolveValue(step.end.message, ctx))) : null;
       return { next: END, end: { state: step.end.result, message }, output: { result: step.end.result, message }, summary: `beendet den Lauf (${step.end.result})` };
+    }
+
+    if ('task' in step || 'approval' in step) {
+      const spec = 'task' in step ? step.task : step.approval;
+      const what = 'task' in step ? 'die Aufgabe' : 'die Genehmigung';
+      const title = expr(() => String(resolveValue(spec.title, ctx) ?? ''));
+      if (o.dry || !o.full) {
+        const outcome = 'task' in step ? (step.task.outcomes?.[0] ?? 'done') : 'approved';
+        const out = { taskId: null, outcome, values: {}, ...('approval' in step ? { votes: [], reason: null } : {}) };
+        return { next: advance(def, cursor, loops), input: { title }, output: out, stepOutput: out, summary: `würde ${what} «${title}» anlegen und warten (angenommen: «${outcome}»)` };
+      }
+      const full = o.full;
+      await tx.query('SAVEPOINT workflow_task');
+      let task;
+      try {
+        task = await this.withCausation(tx, { runId: run.id, depth: run.chain_depth }, () => this.tasks.createFromStep(tx, full, step as TaskStep | ApprovalStep, cursor, ctx));
+      } catch (e) {
+        await tx.query('ROLLBACK TO SAVEPOINT workflow_task');
+        throw e;
+      }
+      await tx.query('RELEASE SAVEPOINT workflow_task');
+      return {
+        next: cursor, waitTask: task.id, input: { title }, summary: `wartet auf ${what} «${title}»`,
+        output: { taskId: task.id, assignee: task.assignee_id ? { id: task.assignee_id, kind: task.assignee_kind } : null, queueId: task.queue_id, dueAt: task.due_at },
+      };
     }
 
     throw new StepFailure('unsupported', `Schrittart «${kindOf(step)}» folgt in einer späteren Stufe`);

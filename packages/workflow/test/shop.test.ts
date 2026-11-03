@@ -138,7 +138,7 @@ test('shop bindet den Baukasten ein: Status-Route mit Anmeldung der App', async 
     const ok = await app.inject({ method: 'GET', url: '/v1/workflows/status', headers: { 'x-user': 'anna' } });
     assert.equal(ok.statusCode, 200);
     const body = ok.json<WorkflowStatus>();
-    assert.deepEqual(body, { configured: true, enabled: true, available: false, stage: 1, version: WORKFLOW_PACKAGE_VERSION });
+    assert.deepEqual(body, { configured: true, enabled: true, available: false, stage: 2, version: WORKFLOW_PACKAGE_VERSION });
     const anon = await app.inject({ method: 'GET', url: '/v1/workflows/status' });
     assert.equal(anon.statusCode, 401, 'Fehler der App');
   } finally { await app.close(); }
@@ -160,9 +160,10 @@ test('Meta-Route: angemeldete Ereignisse, Aktionen und Bezugstypen für den Edit
     assert.deepEqual(meta.subjectTypes.map(t => [t.type, t.label, t.fields.map(f => f.key)]), [['order', 'Bestellung', ['customer', 'total', 'state']]]);
     assert.deepEqual(meta.stateFields, [{ subjectType: 'order', key: 'state', label: 'Zustand' }]);
     assert.deepEqual(meta.fieldKinds.map(f => f.key), ['shop']);
-    assert.deepEqual(meta.stepKinds, ['action', 'if', 'foreach', 'wait', 'end', 'set']);
+    assert.deepEqual(meta.stepKinds, ['action', 'if', 'foreach', 'wait', 'task', 'approval', 'end', 'set']);
     assert.ok(meta.operators.includes('isSet') && meta.unaryOperators.includes('isSet') && meta.formatters.includes('date'));
     assert.equal(meta.canActAs, false);
+    assert.equal(meta.teams, false);
     assert.equal((await app.inject({ method: 'GET', url: '/v1/workflows/meta', headers: { 'x-user': 'bot' } })).statusCode, 403, 'ohne workflow:read');
     assert.equal((await app.inject({ method: 'GET', url: '/v1/workflows/meta?scopeType=shop', headers: { 'x-user': 'anna' } })).statusCode, 422);
   } finally { await app.close(); }
@@ -203,7 +204,7 @@ test('dispatch kostet ohne Auslöser im Zwischenspeicher keine Abfrage; checkTra
   const check = await wf.checkTransition(s.tx, { id: 'anna', kind: 'person' }, { type: 'order', id: 'o1' }, 'state', 'new', 'cancelled');
   assert.deepEqual(check, { allowed: true });
   assert.deepEqual([s.audit, s.outbox, s.jobs, s.notices], [[], [], [], []]);
-  assert.deepEqual(wf.jobs.map(j => j.kind), ['workflow.step', 'workflow.start']);
+  assert.deepEqual(wf.jobs.map(j => j.kind), ['workflow.step', 'workflow.start', 'workflow.sla']);
   assert.equal(wf.limits.stepsPerRun, 20);
   assert.equal(wf.limits.chainDepth, DEFAULT_LIMITS.chainDepth);
 });
@@ -211,7 +212,7 @@ test('dispatch kostet ohne Auslöser im Zwischenspeicher keine Abfrage; checkTra
 test('Migrationen mit Schema, Rollen und Ausdrücken der App', () => {
   const wf = workflow(shop().options);
   const m = wf.migrations({ schema: 'shop', appRole: 'shop_app', schedRole: 'shop_worker', tenantExpr: "current_setting('shop.tenant')::uuid" });
-  assert.deepEqual(m.map(x => x.name), ['workflow_001_core.sql']);
+  assert.deepEqual(m.map(x => x.name), ['workflow_001_core.sql', 'workflow_002_tasks.sql']);
   assert.match(m[0]!.checksum, /^[0-9a-f]{64}$/);
   assert.doesNotMatch(m[0]!.sql, /\{\{\w+\}\}/, 'alle Platzhalter ersetzt');
   assert.match(m[0]!.sql, /CREATE TABLE IF NOT EXISTS shop\.workflow_run/);

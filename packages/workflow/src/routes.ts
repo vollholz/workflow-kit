@@ -1,7 +1,8 @@
 /**
  * REST-Routen des Baukastens unter `<prefix>` (Standard `/v1`): Workflows (Entwurf, Prüfen, Aktivieren, Pausieren,
  * Archivieren, Versionen), manueller Start, Probelauf, Läufe mit Schrittprotokoll, Vorfälle, Einstellungen, Status und
- * Angaben für den Editor (`meta`: angemeldete Ereignisse, Aktionen, Bezugstypen mit Feldern).
+ * Angaben für den Editor (`meta`: angemeldete Ereignisse, Aktionen, Bezugstypen mit Feldern). Aufgaben, Warteschlangen und Kalender
+ * (Stufe 2) stehen in `task-routes.ts` und nutzen dieselben Hilfen (`handle`, `need`, `fail`).
  *
  * Regeln:
  * - Jede Route liest den Akteur über `host.actor(req)` und arbeitet in genau einer Transaktion `host.tx(req, …)`.
@@ -22,6 +23,7 @@ import { definitionChecksum, stageProblems, type Engine, type RunRow, type Tenan
 import { WORKFLOW_EVENT_TYPES } from './events.ts';
 import { CONDITION_OPS, FORMATTERS, UNARY_OPS } from './expressions.ts';
 import { workflowPermissions } from './permissions.ts';
+import { registerTaskRoutes } from './task-routes.ts';
 import type {
   ActorRef, EventSource, FieldDef, FieldKind, JsonSchema, ScopeRef, StateField, SubjectRef, Tx, WorkflowAction, WorkflowHost, WorkflowLimits,
   WorkflowSubject,
@@ -75,6 +77,8 @@ export interface WorkflowMeta {
   formatters: string[];
   /** Kann beim Aktivieren ein anderer Akteur gewählt werden (`host.canActAs`)? */
   canActAs: boolean;
+  /** Bietet die App eine Auswahl von Teams an (`host.teams`, `GET /queues/teams`)? */
+  teams: boolean;
 }
 
 const LIMIT_KEYS = ['activeWorkflows', 'runsPerDay', 'stepsPerRun', 'foreachItems', 'httpCallsPerDay', 'chainDepth', 'runsPerSubjectPerMinute'] as const;
@@ -210,9 +214,10 @@ export function registerRoutes(app: FastifyInstance, o: RouteOptions): void {
       subjectTypes,
       stateFields: o.stateFields.map(f => ({ subjectType: f.subjectType, key: f.key, label: f.label })),
       fieldKinds: o.fields.map(f => ({ key: f.key, label: f.label, valueSchema: f.valueSchema })),
-      stepKinds: STEP_KINDS.filter(k => !['task', 'approval', 'subflow'].includes(k)),
+      stepKinds: STEP_KINDS.filter(k => k !== 'subflow'),
       operators: [...CONDITION_OPS], unaryOperators: [...UNARY_OPS], formatters: [...FORMATTERS],
       canActAs: typeof host.canActAs === 'function',
+      teams: typeof host.teams === 'function',
     };
     return meta;
   }));
@@ -604,4 +609,6 @@ export function registerRoutes(app: FastifyInstance, o: RouteOptions): void {
       return runJson(after);
     }));
   }
+
+  registerTaskRoutes(app, o, { handle, need, fail });
 }

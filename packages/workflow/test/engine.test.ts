@@ -90,7 +90,7 @@ test('Prüfsumme unabhängig von der Reihenfolge der Schlüssel', () => {
   assert.notEqual(definitionChecksum({ a: 1 }), definitionChecksum({ a: 2 }));
 });
 
-test('Stufe 1 führt Automationen aus; Aufgaben, Unterabläufe und Warten auf Ereignisse noch nicht', () => {
+test('Stufe 2 führt Automationen, Aufgaben und Genehmigungen aus; Unterabläufe und Warten auf Ereignisse noch nicht', () => {
   assert.deepEqual(stageProblems(def), []);
   const later = {
     ...def,
@@ -100,6 +100,6 @@ test('Stufe 1 führt Automationen aus; Aufgaben, Unterabläufe und Warten auf Er
       { id: 'i', if: { field: 'a', op: 'isSet' }, then: [{ id: 'ap', approval: { title: 'x', approvers: [{ field: 'a' }], mode: 'first' } }] },
     ],
   } as unknown as WorkflowDefinition;
-  assert.deepEqual(stageProblems(later).map(p => p.path), ['/steps/0/task', '/steps/1/wait/event', '/steps/2/then/0/approval']);
+  assert.deepEqual(stageProblems(later).map(p => p.path), ['/steps/1/wait/event']);
   assert.deepEqual(stageProblems({ ...def, kind: 'case' } as unknown as WorkflowDefinition).map(p => p.path), ['/kind']);
 });
