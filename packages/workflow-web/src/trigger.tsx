@@ -22,7 +22,7 @@ export function describeCron(cron: string): string | null {
   const [m, h, dom, mon, dow] = f as [string, string, string, string, string];
   const num = (v: string) => /^\d+$/.test(v);
   const every = /^\*\/(\d+)$/.exec(m);
-  if (every && h === '*' && dom === '*' && mon === '*' && dow === '*') return `alle ${every[1]} Minuten`;
+  if (every && h === '*' && dom === '*' && mon === '*' && dow === '*') return every[1] === '1' ? 'jede Minute' : `alle ${every[1]} Minuten`;
   if (num(m) && h === '*' && dom === '*' && mon === '*' && dow === '*') return `stündlich zur Minute ${m}`;
   if (!num(m) || !(num(h) || /^\d+(,\d+)+$/.test(h)) || mon !== '*') return null;
   const at = `um ${h.split(',').map(x => `${two(x)}:${two(m)}`).join(' und ')}`;

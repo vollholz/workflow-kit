@@ -79,7 +79,7 @@ describe('MyWork', () => {
     await waitFor(() => expect(calls.find(c => c.path.endsWith('/decide'))?.body).toEqual({ decision: 'rejected', reason: 'Budget' }));
     await userEvent.click(await screen.findByRole('checkbox', { name: '«Freigabe» auswählen' }));
     await userEvent.click(screen.getByRole('button', { name: 'Abbrechen …' }));
-    const dialog = screen.getByRole('alertdialog', { name: '1 Aufgabe(n) abbrechen?' });
+    const dialog = screen.getByRole('alertdialog', { name: '1 Aufgabe abbrechen?' });
     await userEvent.click(within(dialog).getByRole('button', { name: 'Abbrechen' }));
     await waitFor(() => expect(calls.find(c => c.path === '/v1/tasks/bulk')?.body).toEqual({ action: 'cancel', ids: [T1], reason: null }));
   });

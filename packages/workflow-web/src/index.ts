@@ -8,7 +8,7 @@
  * verfügbar».
  */
 export {
-  actorName, useWorkflow, WorkflowProvider,
+  ActorName, actorName, SubjectTitle, useWorkflow, WorkflowProvider,
   type ActorConfig, type FieldConfig, type FieldInputProps, type SubjectConfig, type SubjectHit, type WorkflowActor, type WorkflowApi,
   type WorkflowContextValue, type WorkflowProviderProps, type WorkflowScopeRef, type WorkflowSubjectRef,
 } from './provider.tsx';
@@ -22,7 +22,7 @@ export {
   useWorkflowVersion, useWorkflowVersions, wfKeys, wfRequest,
   useBulkTasks, useCalendar, useCalendarPreview, useCalendars, useDeleteCalendar, useDeleteQueue, useQueue, useQueueMembers, useQueues,
   useSaveCalendar, useSaveQueue, useTask, useTaskAction, useTaskCounts, useTasks, useTeams,
-  type DryRunBody, type IncidentAction, type RunFilter, type TaskAction, type TaskFilter, type WorkflowListFilter,
+  type DryRunBody, type IncidentAction, type RefetchInterval, type RunFilter, type TaskAction, type TaskFilter, type WorkflowListFilter,
 } from './api.ts';
 export { WorkflowList, type WorkflowListProps } from './WorkflowList.tsx';
 export { StepListEditor, type StepListEditorProps } from './editor.tsx';
@@ -35,6 +35,6 @@ export { CaseView, type CaseViewProps } from './components.tsx';
 export { DueBadge, MyWork, TaskDetail, type MyWorkProps, type TaskDetailProps } from './tasks.tsx';
 export { QueueEditor, QueueList, QueueView, type QueueEditorProps, type QueueListProps, type QueueViewProps } from './queues.tsx';
 export { CalendarEditor, CalendarList, formatHours, parseHours, type CalendarEditorProps } from './calendars.tsx';
-export { AssigneeInput, TeamInput, describeAssignee } from './assignee.tsx';
+export { AssigneeInput, AssigneeText, PersonInput, TeamInput, describeAssignee } from './assignee.tsx';
 export { fmtDue } from './ui.tsx';
 export type * from './types.ts';

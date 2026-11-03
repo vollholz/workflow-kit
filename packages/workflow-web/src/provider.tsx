@@ -48,6 +48,11 @@ export interface SubjectConfig {
   href?: (id: string) => string;
   /** Bezug in der App öffnen (statt Link), z. B. in einer Schublade. */
   onOpen?: (id: string) => void;
+  /**
+   * Titel eines Bezugs als Baustein der App (darf eigene Hooks nutzen, z. B. den Bezug laden); ohne Angabe der Titel
+   * aus der API, sonst Bezeichnung des Typs und ID.
+   */
+  Title?: ComponentType<{ id: string }>;
 }
 
 /** Eingabe für eine Feldart der App. */
@@ -66,8 +71,13 @@ export interface FieldConfig {
 
 /** Akteure anzeigen und wählen. */
 export interface ActorConfig {
-  /** Bezeichnung eines Akteurs (Person oder Maschinen-Client); ohne Angabe die ID. */
+  /** Bezeichnung eines Akteurs (Person oder Maschinen-Client) als Text, z. B. für `title` und Auswahllisten; ohne Angabe die ID. */
   label?: (actor: WorkflowActor) => string | undefined;
+  /**
+   * Name eines Akteurs als Baustein der App (darf eigene Hooks nutzen, z. B. die Person laden); überall, wo die
+   * Oberfläche Akteure zeigt. Ohne Angabe `label`, sonst die ID.
+   */
+  Name?: ComponentType<{ actor: WorkflowActor }>;
   /** Maschinen-Clients, die die angemeldete Person beim Aktivieren wählen darf (W6; nur mit `canActAs` im Backend). */
   clients?: () => Promise<WorkflowActor[]>;
   /** Personen suchen (Weitergeben einer Aufgabe); ohne Suche gibt man die ID ein. */
@@ -149,4 +159,22 @@ export function actorName(w: Pick<WorkflowContextValue, 'actors' | 'me'>, a: { i
   if (a.label) return a.label;
   if (w.me && w.me.id === a.id && w.me.kind === a.kind) return w.me.label ?? 'Du';
   return a.kind === 'client' ? `Maschinen-Client ${a.id}` : a.id;
+}
+
+/** Name eines Akteurs: Baustein der App (`actors.Name`), sonst `actorName`. */
+export function ActorName({ actor }: { actor: WorkflowActor | null | undefined }) {
+  const w = useWorkflow();
+  if (!actor) return <>–</>;
+  const Name = w.actors.Name;
+  if (Name) return <Name actor={actor} />;
+  return <>{actorName(w, actor)}</>;
+}
+
+/** Titel eines Bezugs: Baustein der App (`subjects.<typ>.Title`), sonst `title` aus der API, sonst Typ und ID. */
+export function SubjectTitle({ type, id, title }: { type: string; id: string; title?: string | null }) {
+  const w = useWorkflow();
+  const cfg = w.subjects[type];
+  if (cfg?.Title) return <cfg.Title id={id} />;
+  if (title) return <>{title}</>;
+  return <>{`${cfg?.label ?? type} ${id}`}</>;
 }

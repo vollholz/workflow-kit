@@ -113,7 +113,7 @@ function CalendarForm({ cal, onSaved, onClose }: { cal: CalendarJson | null; onS
         {DAYS.map(([k, label]) => (
           <div key={k} className="wf-row">
             <label htmlFor={`${id}-${k}`} className="wf-day">{label}</label>
-            <ui.Input id={`${id}-${k}`} value={hours[k]} placeholder="frei" aria-invalid={bad.includes(k)} aria-describedby={`${id}-wh`}
+            <ui.Input id={`${id}-${k}`} value={hours[k]} placeholder="frei" aria-label={`${label}: Arbeitszeiten`} aria-invalid={bad.includes(k)} aria-describedby={`${id}-wh`}
               onChange={e => setHours({ ...hours, [k]: e.target.value })} />
           </div>
         ))}

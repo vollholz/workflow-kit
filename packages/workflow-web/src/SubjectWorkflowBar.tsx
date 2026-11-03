@@ -6,14 +6,16 @@
  * Regeln: Ohne verfügbares Modul zeigt die Leiste nichts. Die Liste der Knöpfe stammt aus den aktiven Versionen
  * (`GET /workflows?state=active`, danach je Workflow die aktive Version); welche davon zu diesem Bezug passen,
  * entscheidet die App mit `filter` (z. B. nach Bereich), sonst alle. Starten nur mit `workflow:run`.
+ * - Nach einem Start lädt die Leiste Aufgaben und Läufe neu und, solange ein Lauf des Bezugs läuft, alle 2 s nach
+ *   (höchstens 30 s), damit Aufgaben, die der Worker später anlegt, ohne Neuladen erscheinen.
  */
-import { useQueries } from '@tanstack/react-query';
-import { useId, useState } from 'react';
+import { useQueries, useQueryClient, type InfiniteData } from '@tanstack/react-query';
+import { useEffect, useId, useRef, useState } from 'react';
 import { missingRequired, FieldForm } from './forms.tsx';
-import { useRuns, useStartRun, useWorkflows, useWorkflowStatus, wfKeys, wfRequest } from './api.ts';
+import { useRuns, useStartRun, useWorkflows, useWorkflowStatus, wfKeys, wfRequest, type RunFilter } from './api.ts';
 import { useWorkflow, type WorkflowSubjectRef } from './provider.tsx';
 import { SubjectTasks } from './tasks.tsx';
-import type { FieldDefJson, VersionJson, WorkflowSummary } from './types.ts';
+import type { FieldDefJson, RunPage, VersionJson, WorkflowSummary } from './types.ts';
 import { Badge, fmtDateTime, RUN_STATE_LABEL, runTone } from './ui.tsx';
 
 export interface SubjectWorkflowBarProps {
@@ -30,10 +32,24 @@ export interface SubjectWorkflowBarProps {
 
 interface ManualWorkflow { workflow: WorkflowSummary; label: string; form: FieldDefJson[] }
 
+/** Abstand und Dauer des Nachladens nach einem Start. */
+const POLL_MS = 2_000;
+const POLL_FOR_MS = 30_000;
+
 export function SubjectWorkflowBar({ subject, filter, onOpenRun, onOpenTask, recent = 5 }: SubjectWorkflowBarProps) {
   const w = useWorkflow();
   const { ui } = w;
   const id = useId();
+  const qc = useQueryClient();
+  // Nachladen nach einem Start: bis `pollUntil`, solange ein Lauf des Bezugs `running` ist (Stand aus dem
+  // Zwischenspeicher, damit die Intervall-Funktionen der Abfragen immer die neueste Antwort sehen).
+  const pollUntil = useRef(0);
+  const runFilter: RunFilter = { subjectType: subject.type, subjectId: subject.id, limit: recent };
+  const every = () => {
+    if (Date.now() >= pollUntil.current) return false;
+    const data = qc.getQueryData<InfiniteData<RunPage>>(wfKeys.runs(runFilter));
+    return data?.pages[0]?.items.some(r => r.state === 'running') ? POLL_MS : false;
+  };
   const status = useWorkflowStatus();
   const available = !!status.data?.available;
   const active = useWorkflows({ state: 'active' }, available);
@@ -44,7 +60,14 @@ export function SubjectWorkflowBar({ subject, filter, onOpenRun, onOpenTask, rec
       queryFn: ({ signal }: { signal: AbortSignal }) => wfRequest<VersionJson>(w, 'GET', `/workflows/${encodeURIComponent(x.id)}/versions/${x.activeVersion}`, { signal }),
     })),
   });
-  const runs = useRuns({ subjectType: subject.type, subjectId: subject.id, limit: recent }, available);
+  const runs = useRuns(runFilter, available, { refetchInterval: every });
+  const running = (runs.data?.pages[0]?.items ?? []).some(r => r.state === 'running');
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    // Lauf ist eben fertig oder wartet (z. B. auf eine Aufgabe): Aufgaben einmal frisch holen.
+    if (wasRunning.current && !running) void qc.invalidateQueries({ queryKey: wfKeys.allTasks });
+    wasRunning.current = running;
+  }, [running, qc]);
   const start = useStartRun();
   const [open, setOpen] = useState<ManualWorkflow | null>(null);
   const [done, setDone] = useState<string | null>(null);
@@ -56,9 +79,9 @@ export function SubjectWorkflowBar({ subject, filter, onOpenRun, onOpenTask, rec
   });
   const names = new Map((active.data?.items ?? []).map(x => [x.id, x.name]));
   const canRun = w.can('workflow:run');
-  const run = (m: ManualWorkflow, input: Record<string, unknown> = {}) => start.mutate({ workflowId: m.workflow.id, subject, input }, {
+  const run = (m: ManualWorkflow, input: Record<string, unknown> = {}) => { pollUntil.current = Date.now() + POLL_FOR_MS; return start.mutate({ workflowId: m.workflow.id, subject, input }, {
     onSuccess: () => { setOpen(null); setDone(`«${m.label}» gestartet.`); },
-  });
+  }); };
   const items = runs.data?.pages[0]?.items ?? [];
   return (
     <section className="wf-bar" aria-labelledby={`${id}-h`}>
@@ -75,7 +98,7 @@ export function SubjectWorkflowBar({ subject, filter, onOpenRun, onOpenTask, rec
       <div role="status" aria-live="polite" className="wf-ok">{done}</div>
       {start.isError && !open ? <ui.ErrorBox error={start.error} /> : null}
       <h4>Offene Aufgaben</h4>
-      <SubjectTasks subject={subject} onOpenTask={onOpenTask} />
+      <SubjectTasks subject={subject} onOpenTask={onOpenTask} refetchInterval={every} />
       <h4>Letzte Läufe</h4>
       {runs.isPending ? <ui.Loading label="Läufe werden geladen …" /> : runs.isError ? <ui.ErrorBox error={runs.error} /> : items.length ? (
         <ul className="wf-plain" aria-label="Letzte Läufe">

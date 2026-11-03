@@ -8,7 +8,7 @@
  */
 import { useId, useState } from 'react';
 import { useIncidentAction, useRun, useRuns, useWorkflows, type IncidentAction, type RunFilter } from './api.ts';
-import { actorName, useWorkflow } from './provider.tsx';
+import { ActorName, SubjectTitle, useWorkflow } from './provider.tsx';
 import type { RunJson, RunState } from './types.ts';
 import { Badge, fmtDateTime, fmtElapsed, Json, RUN_STATE_LABEL, runTone, STEP_STATE_LABEL, TRIGGER_KIND_LABEL } from './ui.tsx';
 import { STEP_KIND_LABEL } from './steps.tsx';
@@ -72,6 +72,7 @@ export function RunLog({ workflowId, subject, runId, onOpenWorkflow }: RunLogPro
                 <>
                   <label htmlFor={`${id}-bi`} className="wf-sr">ID des Bezugs</label>
                   <ui.Input id={`${id}-bi`} placeholder="ID" value={subjectId} onChange={e => setSubjectId(e.target.value)} />
+                  {subjectId.trim() ? <span className="wf-muted wf-small" aria-live="polite"><SubjectTitle type={subjectType} id={subjectId.trim()} /></span> : null}
                 </>
               ) : null}
             </>
@@ -112,7 +113,7 @@ export function SubjectLink({ subject }: { subject: { type: string; id: string }
   const w = useWorkflow();
   if (!subject) return <span className="wf-muted">–</span>;
   const cfg = w.subjects[subject.type];
-  const text = `${cfg?.label ?? subject.type} ${subject.id}`;
+  const text = <SubjectTitle type={subject.type} id={subject.id} />;
   if (cfg?.onOpen) return <button type="button" className="wf-link" onClick={() => cfg.onOpen!(subject.id)}>{text}</button>;
   if (cfg?.href) return <a className="wf-link" href={cfg.href(subject.id)}>{text}</a>;
   return <span>{text}</span>;
@@ -142,9 +143,9 @@ function RunDetail({ runId, name, onBack, onOpenWorkflow }: { runId: string; nam
       <dl className="wf-summary">
         <dt>Zustand</dt><dd><Badge tone={runTone(r.state)}>{RUN_STATE_LABEL[r.state]}</Badge></dd>
         <dt>Workflow</dt><dd>{onOpenWorkflow ? <button type="button" className="wf-link" onClick={() => onOpenWorkflow(r.workflowId)}>{name.get(r.workflowId) ?? r.workflowId}</button> : (name.get(r.workflowId) ?? r.workflowId)} · Version {r.version}</dd>
-        <dt>Auslöser</dt><dd>{TRIGGER_KIND_LABEL[r.triggerKind] ?? r.triggerKind}{r.trigger.event ? ` · ${r.trigger.event.type}` : ''}{r.trigger.manual ? ` · von ${actorName(w, r.trigger.manual.by)}` : ''}</dd>
+        <dt>Auslöser</dt><dd>{TRIGGER_KIND_LABEL[r.triggerKind] ?? r.triggerKind}{r.trigger.event ? ` · ${r.trigger.event.type}` : ''}{r.trigger.manual ? <>{' · von '}<ActorName actor={r.trigger.manual.by} /></> : null}</dd>
         <dt>Bezug</dt><dd><SubjectLink subject={r.subject} /></dd>
-        <dt>Akteur</dt><dd>{actorName(w, r.actor)}</dd>
+        <dt>Akteur</dt><dd><ActorName actor={r.actor} /></dd>
         <dt>Start</dt><dd>{fmtDateTime(r.startedAt)}{r.finishedAt ? ` · Ende ${fmtDateTime(r.finishedAt)} (${fmtElapsed(r.startedAt, r.finishedAt)})` : ''}</dd>
         {r.wakeAt ? <><dt>Wartet bis</dt><dd>{fmtDateTime(r.wakeAt)}</dd></> : null}
         {r.chainDepth > 1 ? <><dt>Kettentiefe</dt><dd>{r.chainDepth}</dd></> : null}

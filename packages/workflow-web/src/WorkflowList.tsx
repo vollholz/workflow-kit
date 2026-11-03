@@ -5,7 +5,7 @@
  */
 import { useId, useState } from 'react';
 import { useCreateWorkflow, useRuns, useWorkflows, useWorkflowStatus } from './api.ts';
-import { actorName, useWorkflow, type WorkflowScopeRef } from './provider.tsx';
+import { ActorName, useWorkflow, type WorkflowScopeRef } from './provider.tsx';
 import { StatusBanner } from './SettingsPanel.tsx';
 import type { WorkflowState, WorkflowSummary } from './types.ts';
 import { Badge, KIND_LABEL, STATE_LABEL, stateTone } from './ui.tsx';
@@ -70,7 +70,7 @@ export function WorkflowList({ onOpen, scope, onCreated }: WorkflowListProps) {
                     <td>{w.scopeLabel(x.scope)}</td>
                     <td><Badge tone={stateTone(x.state)}>{STATE_LABEL[x.state]}</Badge>{x.activeVersion ? <span className="wf-muted wf-small"> v{x.activeVersion}</span> : null}</td>
                     <td><LastRuns workflow={x} /></td>
-                    <td>{x.actor ? actorName(w, x.actor) : <span className="wf-muted">–</span>}</td>
+                    <td>{x.actor ? <ActorName actor={x.actor} /> : <span className="wf-muted">–</span>}</td>
                   </tr>
                 ))}
               </tbody>

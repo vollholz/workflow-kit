@@ -7,7 +7,7 @@ import { useEffect, useId, useState } from 'react';
 import { useSaveWorkflowSettings, useWorkflowSettings, useWorkflowStatus } from './api.ts';
 import { useWorkflow } from './provider.tsx';
 import type { WorkflowLimitsJson, WorkflowStatusJson } from './types.ts';
-import { MissingRight } from './ui.tsx';
+import { MissingRight, plural } from './ui.tsx';
 
 const LIMIT_LABEL: Record<keyof WorkflowLimitsJson, string> = {
   activeWorkflows: 'Aktive Workflows', runsPerDay: 'Läufe pro Tag', stepsPerRun: 'Schritte pro Lauf', foreachItems: 'Einträge je «Für jedes»',
@@ -91,7 +91,7 @@ export function SettingsPanel() {
           </div>
         ))}
       </fieldset>
-      <p className="wf-hint">Heute: {s.usage.runs} Läufe ({s.usage.runsRejected} abgewiesen), {s.usage.steps} Schritte, {s.usage.httpCalls} Aufrufe nach aussen, {s.usage.activeWorkflows} aktive Workflows.</p>
+      <p className="wf-hint">{`Heute: ${plural(s.usage.runs, 'Lauf', 'Läufe')} (${s.usage.runsRejected} abgewiesen), ${plural(s.usage.steps, 'Schritt', 'Schritte')}, ${plural(s.usage.httpCalls, 'Aufruf', 'Aufrufe')} nach aussen, ${plural(s.usage.activeWorkflows, 'aktiver Workflow', 'aktive Workflows')}.`}</p>
       <div className="wf-row">
         <ui.Button variant="primary" disabled={save.isPending || invalid.length > 0} onClick={submit}>{save.isPending ? 'Speichert …' : 'Speichern'}</ui.Button>
         <span role="status" aria-live="polite" className="wf-ok">{saved ? 'Gespeichert.' : ''}</span>

@@ -12,12 +12,12 @@
  * - Texte in Du-Form, Ergebnisse `approved`/`rejected`/`done`/`cancelled` übersetzt, eigene Ergebnisse wie definiert.
  */
 import { useId, useState, type ReactNode } from 'react';
-import { useBulkTasks, useQueueMembers, useQueues, useTask, useTaskAction, useTaskCounts, useTasks, type TaskAction, type TaskFilter } from './api.ts';
+import { useBulkTasks, useQueueMembers, useQueues, useTask, useTaskAction, useTaskCounts, useTasks, type RefetchInterval, type TaskAction, type TaskFilter } from './api.ts';
 import { FieldForm, missingRequired } from './forms.tsx';
-import { actorName, useWorkflow, type WorkflowActor } from './provider.tsx';
+import { ActorName, SubjectTitle, useWorkflow, type WorkflowActor } from './provider.tsx';
 import type { ActorRefJson, TaskDetailJson, TaskJson, TaskSort, TaskView } from './types.ts';
 import {
-  Badge, fmtDateTime, fmtDue, MODE_LABEL, outcomeLabel, PRIORITY_LABEL, priorityTone, SORT_LABEL, TASK_STATE_LABEL, taskTone,
+  Badge, fmtDateTime, fmtDue, MODE_LABEL, outcomeLabel, plural, PRIORITY_LABEL, priorityTone, SORT_LABEL, TASK_STATE_LABEL, taskTone,
 } from './ui.tsx';
 
 const VIEW_LABEL: Record<TaskView, string> = { mine: 'Mir', team: 'Mein Team', all: 'Alle' };
@@ -39,7 +39,7 @@ function SubjectLabel({ task }: { task: Pick<TaskJson, 'subject' | 'hidden'> }) 
   if (!s) return <span className="wf-muted">–</span>;
   if (task.hidden) return <span className="wf-muted">vertraulich</span>;
   const cfg = w.subjects[s.type];
-  const text = s.title ?? `${cfg?.label ?? s.type} ${s.id}`;
+  const text = <SubjectTitle type={s.type} id={s.id} title={s.title} />;
   if (cfg?.onOpen) return <button type="button" className="wf-link" onClick={() => cfg.onOpen!(s.id)}>{text}</button>;
   if (cfg?.href) return <a className="wf-link" href={cfg.href(s.id)}>{text}</a>;
   return <span>{text}</span>;
@@ -122,7 +122,7 @@ export function MyWork({ filter = 'mine', queueId, taskId, onOpenTask, onOpenRun
                 {view === 'mine' ? 'Neue Aufgaben erscheinen hier, sobald ein Workflow sie dir gibt.' : 'Für diese Auswahl gibt es nichts zu tun.'}
               </ui.Empty>
             )}
-            {list.data && list.data.total > items.length ? <p className="wf-muted wf-small">{`${items.length} von ${list.data.total} Aufgaben angezeigt.`}</p> : null}
+            {list.data && list.data.total > items.length ? <p className="wf-muted wf-small">{`${items.length} von ${plural(list.data.total, 'Aufgabe', 'Aufgaben')} angezeigt.`}</p> : null}
           </div>
           {open ? <TaskDetail taskId={open} onClose={() => select(null)} onOpenRun={onOpenRun} /> : null}
         </div>
@@ -161,7 +161,7 @@ function TaskTable({ items, open, onOpen, picked, onPick }: {
               </div>
             </th>
             <td><SubjectLabel task={t} /></td>
-            <td>{t.assignee ? actorName(w, t.assignee) : <span className="wf-muted">{t.kind === 'approval' ? `${t.candidates.length} Personen` : 'niemand'}</span>}</td>
+            <td>{t.assignee ? <ActorName actor={t.assignee} /> : <span className="wf-muted">{t.kind === 'approval' ? plural(t.candidates.length, 'Person', 'Personen') : 'niemand'}</span>}</td>
             <td><DueBadge dueAt={t.dueAt} done={t.state === 'done' || t.state === 'cancelled'} /></td>
             <td>{t.priority === 'normal' ? <span className="wf-muted">{PRIORITY_LABEL.normal}</span> : <Badge tone={priorityTone(t.priority)}>{PRIORITY_LABEL[t.priority]}</Badge>}</td>
           </tr>
@@ -171,6 +171,11 @@ function TaskTable({ items, open, onOpen, picked, onPick }: {
   );
 }
 
+/** Akteure mit Komma getrennt. */
+function ActorList({ actors }: { actors: ActorRefJson[] }) {
+  return <>{actors.map((a, i) => <span key={`${a.kind}:${a.id}`}>{i ? ', ' : ''}<ActorName actor={a} /></span>)}</>;
+}
+
 /** Massenaktionen für ausgewählte Aufgaben (zuweisen, abbrechen). */
 function BulkBar({ ids, onDone }: { ids: string[]; onDone: () => void }) {
   const { ui } = useWorkflow();
@@ -178,7 +183,7 @@ function BulkBar({ ids, onDone }: { ids: string[]; onDone: () => void }) {
   const [dialog, setDialog] = useState<'assign' | 'cancel' | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const run = (b: Omit<Parameters<typeof bulk.mutate>[0], 'ids'>) => bulk.mutate({ ...b, ids }, {
-    onSuccess: r => { setDialog(null); setMsg(r.failed ? `${r.ok} erledigt, ${r.failed} nicht möglich: ${r.results.filter(x => !x.ok).map(x => x.message).join('; ')}` : `${r.ok} Aufgabe(n) bearbeitet.`); onDone(); },
+    onSuccess: r => { setDialog(null); setMsg(r.failed ? `${r.ok} erledigt, ${r.failed} nicht möglich: ${r.results.filter(x => !x.ok).map(x => x.message).join('; ')}` : `${plural(r.ok, 'Aufgabe', 'Aufgaben')} bearbeitet.`); onDone(); },
   });
   return (
     <div className="wf-bulk" role="group" aria-label="Massenaktionen">
@@ -186,8 +191,8 @@ function BulkBar({ ids, onDone }: { ids: string[]; onDone: () => void }) {
       <ui.Button size="sm" onClick={() => setDialog('assign')}>Zuweisen …</ui.Button>
       <ui.Button size="sm" onClick={() => setDialog('cancel')}>Abbrechen …</ui.Button>
       <span role="status" className="wf-small">{msg}</span>
-      {dialog === 'assign' ? <AssignDialog title={`${ids.length} Aufgabe(n) zuweisen`} allowQueue busy={bulk.isPending} error={bulk.error} onClose={() => setDialog(null)} onAssign={t => run({ action: 'assign', ...t })} /> : null}
-      {dialog === 'cancel' ? <CancelDialog title={`${ids.length} Aufgabe(n) abbrechen?`} busy={bulk.isPending} error={bulk.error} onClose={() => setDialog(null)} onCancel={reason => run({ action: 'cancel', reason })} /> : null}
+      {dialog === 'assign' ? <AssignDialog title={`${plural(ids.length, 'Aufgabe', 'Aufgaben')} zuweisen`} allowQueue busy={bulk.isPending} error={bulk.error} onClose={() => setDialog(null)} onAssign={t => run({ action: 'assign', ...t })} /> : null}
+      {dialog === 'cancel' ? <CancelDialog title={`${plural(ids.length, 'Aufgabe', 'Aufgaben')} abbrechen?`} busy={bulk.isPending} error={bulk.error} onClose={() => setDialog(null)} onCancel={reason => run({ action: 'cancel', reason })} /> : null}
     </div>
   );
 }
@@ -233,11 +238,11 @@ export function TaskDetail({ taskId, onClose, onOpenRun }: TaskDetailProps) {
       <dl className="wf-summary">
         <dt>Bezug</dt><dd><SubjectLabel task={t} /></dd>
         {t.queue ? <><dt>Warteschlange</dt><dd>{t.queue.name ?? t.queue.id}</dd></> : null}
-        <dt>Zuständig</dt><dd>{t.assignee ? actorName(w, t.assignee) : t.candidates.length ? `eine Person aus: ${t.candidates.map(c => actorName(w, c)).join(', ')}` : 'noch niemand'}</dd>
+        <dt>Zuständig</dt><dd>{t.assignee ? <ActorName actor={t.assignee} /> : t.candidates.length ? <>{t.candidates.length === 1 ? '' : 'eine Person aus: '}<ActorList actors={t.candidates} /></> : 'noch niemand'}</dd>
         <dt>Frist</dt><dd>{t.dueAt ? `${fmtDateTime(t.dueAt)}${t.breachedAt ? ' (überschritten)' : ''}` : 'keine'}</dd>
         <dt>Erstellt</dt><dd>{fmtDateTime(t.createdAt)}</dd>
         {t.outcome ? <><dt>Ergebnis</dt><dd>{outcomeLabel(t.outcome)}{t.reason ? ` – ${t.reason}` : ''}</dd></> : null}
-        {t.completedBy ? <><dt>{t.state === 'cancelled' ? 'Abgebrochen von' : 'Erledigt von'}</dt><dd>{`${actorName(w, t.completedBy)}, ${fmtDateTime(t.completedAt)}`}</dd></> : null}
+        {t.completedBy ? <><dt>{t.state === 'cancelled' ? 'Abgebrochen von' : 'Erledigt von'}</dt><dd><ActorName actor={t.completedBy} />{`, ${fmtDateTime(t.completedAt)}`}</dd></> : null}
         {t.runId && onOpenRun ? <><dt>Lauf</dt><dd><button type="button" className="wf-link" onClick={() => onOpenRun(t.runId!)}>Im Protokoll öffnen</button></dd></> : null}
       </dl>
       {active && (a.take || a.release || a.assign || a.handOver || a.cancel) ? (
@@ -290,14 +295,13 @@ function CompleteForm({ task, busy, onComplete }: { task: TaskDetailJson; busy: 
 }
 
 function Votes({ task }: { task: TaskDetailJson }) {
-  const w = useWorkflow();
-  if (!task.votes.length) return <p className="wf-muted wf-small">{`Noch keine Stimmen (${task.candidates.length} Personen können entscheiden).`}</p>;
+  if (!task.votes.length) return <p className="wf-muted wf-small">{`Noch keine Stimmen (${plural(task.candidates.length, 'Person kann', 'Personen können')} entscheiden).`}</p>;
   return (
     <ul className="wf-plain wf-votes" aria-label="Stimmen">
       {task.votes.map((v, i) => (
         <li key={i} className="wf-row">
           <Badge tone={v.decision === 'approved' ? 'ok' : 'bad'}>{outcomeLabel(v.decision)}</Badge>
-          <span>{actorName(w, v.actor)}</span>
+          <span><ActorName actor={v.actor} /></span>
           <span className="wf-muted wf-small">{fmtDateTime(v.at)}</span>
           {v.reason ? <span className="wf-small">{`«${v.reason}»`}</span> : null}
         </li>
@@ -356,13 +360,21 @@ function AssignDialog({ title, queueId = null, candidates = [], allowQueue = fal
   return (
     <ui.Dialog title={title} onClose={onClose}
       footer={<><ui.Button onClick={onClose}>Zurück</ui.Button><ui.Button variant="primary" disabled={busy || (!chosen && !queue)} onClick={submit}>{busy ? 'Wird weitergegeben …' : 'Weitergeben'}</ui.Button></>}>
-      <div className="wf-field">
-        <label htmlFor={`${id}-p`}>Person</label>
-        <ui.Select id={`${id}-p`} value={person} onChange={e => { setPerson(e.target.value); setFree(''); }}>
-          <option value="">– wählen –</option>
-          {options.map(o => <option key={`${o.kind}:${o.id}`} value={`${o.kind}:${o.id}`}>{`${actorName(w, o)}${load.has(`${o.kind}:${o.id}`) ? ` (${load.get(`${o.kind}:${o.id}`)} offen)` : ''}`}</option>)}
-        </ui.Select>
-      </div>
+      {options.length ? (
+        <fieldset className="wf-field">
+          <legend>Person</legend>
+          {options.map(o => {
+            const key = `${o.kind}:${o.id}`;
+            return (
+              <div key={key} className="wf-check-row">
+                <input type="radio" className="wf-check" id={`${id}-p-${key}`} name={`${id}-p`} value={key} checked={person === key}
+                  onChange={() => { setPerson(key); setFree(''); }} />
+                <label htmlFor={`${id}-p-${key}`}><ActorName actor={o} />{load.has(key) ? ` (${load.get(key)} offen)` : ''}</label>
+              </div>
+            );
+          })}
+        </fieldset>
+      ) : null}
       {allowAny ? (
         <div className="wf-field">
           <label htmlFor={`${id}-f`}>{w.actors.search ? 'Andere Person suchen' : 'Andere Person (ID)'}</label>
@@ -370,7 +382,7 @@ function AssignDialog({ title, queueId = null, candidates = [], allowQueue = fal
             setFree(e.target.value); setPerson('');
             if (w.actors.search && e.target.value.trim().length >= 2) void w.actors.search(e.target.value.trim()).then(setHits).catch(() => setHits([]));
           }} />
-          {w.actors.search && hits.length ? <div className="wf-hint">Treffer stehen oben in der Liste.</div> : null}
+          {w.actors.search && hits.length ? <div className="wf-hint">Treffer erscheinen oben unter «Person».</div> : null}
         </div>
       ) : null}
       {allowQueue ? (
@@ -406,9 +418,11 @@ function CancelDialog({ title, busy, error, onClose, onCancel }: { title: string
 }
 
 /** Offene Aufgaben zu einem Bezug (für `SubjectWorkflowBar`). */
-export function SubjectTasks({ subject, onOpenTask }: { subject: { type: string; id: string }; onOpenTask?: (id: string) => void }): ReactNode {
+export function SubjectTasks({ subject, onOpenTask, refetchInterval }: {
+  subject: { type: string; id: string }; onOpenTask?: (id: string) => void; refetchInterval?: RefetchInterval;
+}): ReactNode {
   const w = useWorkflow();
-  const tasks = useTasks({ view: 'all', state: 'active', subjectType: subject.type, subjectId: subject.id, limit: 20 });
+  const tasks = useTasks({ view: 'all', state: 'active', subjectType: subject.type, subjectId: subject.id, limit: 20 }, true, { refetchInterval });
   const items = tasks.data?.items ?? [];
   if (tasks.isPending) return <w.ui.Loading label="Aufgaben werden geladen …" />;
   if (tasks.isError) return <w.ui.ErrorBox error={tasks.error} />;
@@ -419,7 +433,7 @@ export function SubjectTasks({ subject, onOpenTask }: { subject: { type: string;
         <li key={t.id} className="wf-row">
           <Badge tone={taskTone(t.state)}>{TASK_STATE_LABEL[t.state]}</Badge>
           {onOpenTask ? <button type="button" className="wf-link" onClick={() => onOpenTask(t.id)}>{t.title}</button> : <span>{t.title}</span>}
-          <span className="wf-muted wf-small">{t.assignee ? actorName(w, t.assignee) : t.queue?.name ?? ''}</span>
+          <span className="wf-muted wf-small">{t.assignee ? <ActorName actor={t.assignee} /> : t.queue?.name ?? ''}</span>
           <DueBadge dueAt={t.dueAt} />
         </li>
       ))}

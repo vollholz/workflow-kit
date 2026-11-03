@@ -12,13 +12,13 @@
  *   Genehmigenden und Art; Unterabläufe (spätere Stufe) zeigt die Karte nur an.
  */
 import { createContext, useContext, useEffect, useId, useRef, useState } from 'react';
-import { AssigneeInput, describeAssignee } from './assignee.tsx';
+import { AssigneeInput, AssigneeText, describeAssignee } from './assignee.tsx';
 import { ConditionBuilder, describeCondition } from './conditions.tsx';
 import { SchemaForm } from './forms.tsx';
 import { TemplateInput, type ContextField } from './placeholders.tsx';
 import { useWorkflow } from './provider.tsx';
 import type { ApprovalMode, ApprovalStep, DefinitionError, FieldDefJson, OnError, Step, TaskPriority, TaskStep, WorkflowMetaJson } from './types.ts';
-import { MODE_LABEL, PRIORITY_LABEL } from './ui.tsx';
+import { MODE_LABEL, plural, PRIORITY_LABEL } from './ui.tsx';
 
 export interface EditorContext {
   meta: WorkflowMetaJson | undefined;
@@ -59,19 +59,19 @@ export function newStep(kind: StepKindName, id: string): Step {
 // ---------------------------------------------------------------- Dauer (ISO 8601 mit Arbeitstagen)
 
 const UNITS = [
-  { key: 'M', label: 'Minuten', make: (n: number) => `PT${n}M`, re: /^PT(\d+)M$/ },
-  { key: 'H', label: 'Stunden', make: (n: number) => `PT${n}H`, re: /^PT(\d+)H$/ },
-  { key: 'BH', label: 'Arbeitsstunden', make: (n: number) => `PT${n}BH`, re: /^PT(\d+)BH$/ },
-  { key: 'D', label: 'Tage', make: (n: number) => `P${n}D`, re: /^P(\d+)D$/ },
-  { key: 'BD', label: 'Arbeitstage', make: (n: number) => `P${n}BD`, re: /^P(\d+)BD$/ },
-  { key: 'W', label: 'Wochen', make: (n: number) => `P${n}W`, re: /^P(\d+)W$/ },
+  { key: 'M', label: 'Minuten', one: 'Minute', make: (n: number) => `PT${n}M`, re: /^PT(\d+)M$/ },
+  { key: 'H', label: 'Stunden', one: 'Stunde', make: (n: number) => `PT${n}H`, re: /^PT(\d+)H$/ },
+  { key: 'BH', label: 'Arbeitsstunden', one: 'Arbeitsstunde', make: (n: number) => `PT${n}BH`, re: /^PT(\d+)BH$/ },
+  { key: 'D', label: 'Tage', one: 'Tag', make: (n: number) => `P${n}D`, re: /^P(\d+)D$/ },
+  { key: 'BD', label: 'Arbeitstage', one: 'Arbeitstag', make: (n: number) => `P${n}BD`, re: /^P(\d+)BD$/ },
+  { key: 'W', label: 'Wochen', one: 'Woche', make: (n: number) => `P${n}W`, re: /^P(\d+)W$/ },
 ] as const;
 
 export function describeDuration(iso: string | undefined): string {
   if (!iso) return '';
   for (const u of UNITS) {
     const m = u.re.exec(iso);
-    if (m) return `${m[1]} ${u.label}`;
+    if (m) return plural(Number(m[1]), u.one, u.label);
   }
   return iso;
 }
@@ -124,6 +124,18 @@ export function summary(s: Step, meta: WorkflowMetaJson | undefined, fields: Con
   if ('task' in s) return `Aufgabe «${s.task.title || '…'}» für ${describeAssignee(s.task.assignee)}${s.task.due ? `, Frist ${describeDuration(s.task.due)}` : ''}`;
   if ('approval' in s) return `Genehmigung «${s.approval.title || '…'}» bei ${s.approval.approvers.map(a => describeAssignee(a)).join(', ')}`;
   return `${STEP_KIND_LABEL[kindOf(s)] ?? 'Schritt'} (folgt in einer späteren Stufe)`;
+}
+/** Zusammenfassung eines Schritts; bei Aufgabe und Genehmigung mit Namen der Zuständigen (Person, Team, Warteschlange). */
+function StepSummary({ step, meta, fields }: { step: Step; meta: WorkflowMetaJson | undefined; fields: ContextField[] }) {
+  if ('task' in step) {
+    const t = step.task;
+    return <>{`Aufgabe «${t.title || '…'}» für `}<AssigneeText value={t.assignee} />{t.due ? `, Frist ${describeDuration(t.due)}` : ''}</>;
+  }
+  if ('approval' in step) {
+    const a = step.approval;
+    return <>{`Genehmigung «${a.title || '…'}» bei `}{a.approvers.map((x, i) => <span key={i}>{i ? ', ' : ''}<AssigneeText value={x} /></span>)}</>;
+  }
+  return <>{summary(step, meta, fields)}</>;
 }
 const END_LABEL = { completed: 'erfolgreich', cancelled: 'abgebrochen', failed: 'fehlgeschlagen' } as const;
 
@@ -202,7 +214,7 @@ function StepCard({ step, path, number, onChange, onRemove, onUp, onDown }: {
         <span className="wf-step-no" aria-hidden="true">{number}</span>
         <div className="wf-grow">
           <h4 id={headId}><span className="wf-sr">{`${name}:`}</span>{' '}{STEP_KIND_LABEL[kind] ?? kind}{step.label ? ` – ${step.label}` : ''}</h4>
-          <div className="wf-muted wf-small">{summary(step, ed.meta, ed.fields)}</div>
+          <div className="wf-muted wf-small"><StepSummary step={step} meta={ed.meta} fields={ed.fields} /></div>
         </div>
         {!ed.readOnly ? (
           <div className="wf-step-tools">
