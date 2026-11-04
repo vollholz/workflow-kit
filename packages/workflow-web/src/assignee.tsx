@@ -9,12 +9,19 @@
  *
  * Regel: Texte ohne Begriffe einer App; was ein Team ist, sagt die Bezeichnung der App.
  */
-import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { createContext, useContext, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useQueues, useTeams } from './api.ts';
-import { ActorName, useWorkflow, type WorkflowActor } from './provider.tsx';
+import { ActorName, useWorkflow, type WorkflowActor, type WorkflowContextValue, type WorkflowScopeRef } from './provider.tsx';
 import type { ActorRefJson, AssigneeJson, RefJson } from './types.ts';
 
 type Kind = 'actor' | 'team' | 'field' | 'queue';
+
+/**
+ * Bereich des Workflows, für den Teams gewählt werden (Editor). Mit Bereich wählt auch, wer dort Workflows gestaltet
+ * (`workflow:manage`), Teams; sonst braucht es `queue:manage`.
+ */
+export const TeamScope = createContext<WorkflowScopeRef | null>(null);
+const canPickTeams = (w: WorkflowContextValue, scope: WorkflowScopeRef | null) => w.can('queue:manage') || (!!scope && w.can('workflow:manage'));
 export const kindOfAssignee = (a: AssigneeJson): Kind => ('actor' in a ? 'actor' : 'team' in a ? 'team' : 'field' in a ? 'field' : 'queue');
 
 /** Team wählen: Suche über die App oder Typ und ID. */
@@ -23,7 +30,8 @@ export function TeamInput({ value, onChange, label }: { value: RefJson; onChange
   const { ui } = w;
   const id = useId();
   const [q, setQ] = useState('');
-  const teams = useTeams(q, w.can('queue:manage'));
+  const scope = useContext(TeamScope);
+  const teams = useTeams(q, canPickTeams(w, scope), scope);
   if (teams.data?.available) {
     const options = teams.data.items;
     const current = `${value.type}\u0000${value.id}`;
@@ -126,7 +134,8 @@ export function AssigneeInput({ value, onChange, label, kinds = ['actor', 'team'
   const [people, setPeople] = useState<WorkflowActor[]>([]);
   const seq = useRef(0);
   const queues = useQueues(kinds.includes('queue'));
-  const teams = useTeams(q.trim(), kinds.includes('team') && w.can('queue:manage'));
+  const scope = useContext(TeamScope);
+  const teams = useTeams(q.trim(), kinds.includes('team') && canPickTeams(w, scope), scope);
   const search = kinds.includes('actor') ? w.actors.search : undefined;
   const find = (text: string) => {
     setQ(text);
@@ -221,7 +230,8 @@ export function describeAssignee(a: AssigneeJson, queueName?: (id: string) => st
 export function AssigneeText({ value }: { value: AssigneeJson }) {
   const w = useWorkflow();
   const queues = useQueues('queue' in value);
-  const teams = useTeams('', 'team' in value && w.can('queue:manage'));
+  const scope = useContext(TeamScope);
+  const teams = useTeams('', 'team' in value && canPickTeams(w, scope), scope);
   if ('actor' in value) return value.actor.id ? <ActorName actor={value.actor} /> : <>Person</>;
   const queueName = (qid: string) => queues.data?.items.find(q => q.id === qid)?.name;
   const teamName = (t: RefJson) => (teams.data?.available ? teams.data.items.find(o => o.type === t.type && o.id === t.id)?.label : undefined);

@@ -20,7 +20,7 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { isValidTimeZone, nextCronTime } from './cron.ts';
-import { DEFINITION_SCHEMA_VERSION, STEP_KINDS, validateDefinition, type DefinitionError, type WorkflowDefinition } from './definition.ts';
+import { DEFINITION_SCHEMA_VERSION, STEP_KINDS, validateDefinition, walkSteps, type DefinitionError, type WorkflowDefinition } from './definition.ts';
 import { definitionChecksum, stageProblems, type Engine, type RunRow, type TenantSettings, type WorkflowRow } from './engine.ts';
 import { WORKFLOW_EVENT_TYPES } from './events.ts';
 import { CONDITION_OPS, FORMATTERS, UNARY_OPS } from './expressions.ts';
@@ -98,6 +98,21 @@ function workflowJson(w: WorkflowRow, withDefinition: boolean) {
     revision: w.revision, activeVersion: w.active_version, actor: w.actor_id && w.actor_kind ? { id: w.actor_id, kind: w.actor_kind } : null,
     pausedReason: w.paused_reason, createdBy: { id: w.created_by_id, kind: w.created_by_kind }, createdAt: iso(w.created_at), updatedAt: iso(w.updated_at),
     ...(withDefinition ? { definition: w.draft } : {}),
+  };
+}
+
+/**
+ * Angaben für die Liste: Auslöser und Zahl der Schritte dessen, was läuft (aktive Version, sonst Entwurf), ob der Entwurf
+ * von der aktiven Version abweicht, und die Zahl der Läufe mit offenem Vorfall.
+ */
+function listJson(w: WorkflowRow & { active_definition: unknown; active_checksum: string | null; open_incidents: number }) {
+  const def = (w.active_definition ?? w.draft) as { trigger?: unknown; steps?: unknown } | null;
+  const steps = def && Array.isArray(def.steps) ? [...walkSteps(def.steps as never, '/steps')].length : 0;
+  return {
+    ...workflowJson(w, false),
+    trigger: def?.trigger ?? null, stepCount: steps,
+    draftChanged: w.active_checksum !== null && definitionChecksum(w.draft) !== w.active_checksum,
+    openIncidents: w.open_incidents,
   };
 }
 
@@ -315,15 +330,18 @@ export function registerRoutes(app: FastifyInstance, o: RouteOptions): void {
     schema: { querystring: { type: 'object', properties: { state: { enum: ['draft', 'active', 'paused', 'archived'] }, scopeType: { type: 'string' }, scopeId: { type: 'string' } } } },
   }, async req => handle(req, true, async (tx, actor) => {
     const q = req.query as { state?: string; scopeType?: string; scopeId?: string };
-    const rows = (await tx.query<WorkflowRow>(
-      `SELECT * FROM ${S('workflow')} WHERE ($1::text IS NULL OR state = $1) AND ($2::text IS NULL OR scope_type = $2) AND ($3::text IS NULL OR scope_id = $3)
-        ORDER BY name, id`, [q.state ?? null, q.scopeType ?? null, q.scopeId ?? null])).rows;
+    const rows = (await tx.query<WorkflowRow & { active_definition: unknown; active_checksum: string | null; open_incidents: number }>(
+      `SELECT w.*, v.definition AS active_definition, v.checksum AS active_checksum,
+              (SELECT count(*)::int FROM ${S('workflow_run')} r WHERE r.workflow_id = w.id AND r.state = 'incident') AS open_incidents
+         FROM ${S('workflow')} w LEFT JOIN ${S('workflow_version')} v ON v.workflow_id = w.id AND v.version = w.active_version
+        WHERE ($1::text IS NULL OR w.state = $1) AND ($2::text IS NULL OR w.scope_type = $2) AND ($3::text IS NULL OR w.scope_id = $3)
+        ORDER BY w.name, w.id`, [q.state ?? null, q.scopeType ?? null, q.scopeId ?? null])).rows;
     const allowed = new Map<string, boolean>();
     const items = [];
     for (const w of rows) {
       const key = `${w.scope_type}\u0000${w.scope_id}`;
       if (!allowed.has(key)) allowed.set(key, await host.can(tx, actor, 'workflow:read', scopeOf(w)));
-      if (allowed.get(key)) items.push(workflowJson(w, false));
+      if (allowed.get(key)) items.push(listJson(w));
     }
     return { items };
   }));
@@ -473,7 +491,7 @@ export function registerRoutes(app: FastifyInstance, o: RouteOptions): void {
       throw fail(409, 'conflict', 'Nur pausierte Workflows mit einer aktiven Version lassen sich fortsetzen.');
     }
     const target: ActorRef = { id: locked.actor_id, kind: locked.actor_kind };
-    if (!(await host.active(tx, target))) throw fail(422, 'invalid', 'Der Akteur des Workflows ist nicht mehr aktiv. Aktiviere eine neue Version mit einem anderen Akteur.');
+    if (!(await host.active(tx, target))) throw fail(422, 'invalid', 'Der Akteur des Workflows ist nicht mehr aktiv. Aktiviere den Workflow mit einem anderen Akteur.');
     const active = (await tx.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${S('workflow')} WHERE state = 'active'`)).rows[0]?.n ?? 0;
     if (active >= settings!.limits.activeWorkflows) throw fail(409, 'limit', `Höchstens ${settings!.limits.activeWorkflows} aktive Workflows je Mandant.`);
     const v = (await tx.query<{ definition: WorkflowDefinition }>(

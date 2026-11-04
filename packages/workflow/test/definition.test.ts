@@ -98,6 +98,15 @@ test('Hinweise: leerer Weg ohne Folgeschritt, Schritte nach «Beenden», «Wenn�
   assert.deepEqual(validateDefinition({}).warnings, [], 'kein Hinweis bei ungültigem Schema');
 });
 
+test('Pflichtfelder einer Aktion: fehlend oder leer ist ein Fehler, Daten zählen als Wert', () => {
+  const def = (input: Record<string, unknown>) => ({ schemaVersion: 2, kind: 'automation', trigger: { manual: {} }, steps: [{ id: 'a', action: 'status.set', input }] });
+  const known = { inputs: { 'status.set': [{ key: 'objectId', title: 'Objekt' }, { key: 'status', title: 'Status' }] } };
+  assert.deepEqual(errs(def({ objectId: '{{subject.id}}', status: ' ' }), { known }).map(e => [e.path, e.message]), [['/steps/0/input/status', 'Pflichtfeld «Status» ist leer']]);
+  assert.deepEqual(errs(def({}), { known }).map(e => e.path), ['/steps/0/input/objectId', '/steps/0/input/status']);
+  assert.deepEqual(errs(def({ objectId: '{{subject.id}}', status: '{{subject.values.status}}' }), { known }), []);
+  assert.deepEqual(errs(def({}), {}), [], 'ohne Angaben der App keine Prüfung');
+});
+
 test('Pflichtangaben und unbekannte Angaben mit Pfad', () => {
   const d = clone(example) as Record<string, unknown>;
   delete d.trigger;

@@ -46,10 +46,10 @@ describe('Aufgaben und Warteschlangen in der App «shop» (PostgreSQL)', { skip 
   const WF = ['workflow:read', 'workflow:manage', 'workflow:activate', 'workflow:run', 'workflow:operate', 'workflow:admin'];
   const rights: Record<string, string[]> = {
     ada: [...WF, 'order:write', 'task:work', 'task:assign', 'queue:manage'],
-    bea: ['workflow:read', 'task:work'], carl: ['task:work'], dora: ['task:work'], eve: [],
+    bea: ['workflow:read', 'task:work'], carl: ['task:work'], dora: ['task:work'], eve: [], fred: ['workflow:read', 'workflow:manage'],
     gus: [...WF, 'order:write', 'task:work', 'task:assign', 'queue:manage'],
   };
-  const tenantOf: Record<string, string> = { ada: A, bea: A, carl: A, dora: A, eve: A, gus: B };
+  const tenantOf: Record<string, string> = { ada: A, bea: A, carl: A, dora: A, eve: A, fred: A, gus: B };
   const teams: Record<string, string[]> = { sales: ['bea', 'ada'], lead: ['carl', 'dora'], 'sales-b': ['gus'] };
   let now = new Date('2026-11-02T08:00:00Z');
 
@@ -234,6 +234,9 @@ describe('Aufgaben und Warteschlangen in der App «shop» (PostgreSQL)', { skip 
     status(await call('ada', 'DELETE', `/v1/calendars/${calendarId}`, undefined, { 'if-match': '"2"' }), 409, 'conflict');
     const teamsList = ok(await call('ada', 'GET', '/v1/queues/teams?q=sal'));
     assert.deepEqual(teamsList, { available: true, items: [{ type: 'role', id: 'sales', label: 'Rolle sales' }, { type: 'role', id: 'sales-b', label: 'Rolle sales-b' }] });
+    // Wer Workflows im Bereich gestaltet, wählt Teams als Zuständige, auch ohne Warteschlangen zu verwalten
+    assert.equal(ok(await call('fred', 'GET', '/v1/queues/teams?q=sal&scopeType=shop&scopeId=main')).items.length, 2);
+    status(await call('bea', 'GET', '/v1/queues/teams?q=sal'), 403);
     // Sichtbarkeit: Mitglieder sehen ihre Warteschlangen, ohne Recht und ohne Mitgliedschaft nichts
     assert.deepEqual(ok(await call('bea', 'GET', '/v1/queues')).items.map((q: { name: string; member: boolean }) => [q.name, q.member]), [['Verkauf', true]]);
     assert.deepEqual(ok(await call('ada', 'GET', '/v1/queues')).items.map((q: { name: string }) => q.name), ['Leitung', 'Verkauf']);
@@ -366,6 +369,16 @@ describe('Aufgaben und Warteschlangen in der App «shop» (PostgreSQL)', { skip 
     assert.deepEqual([run.state, run.variables], ['completed', { path: 'abgelehnt', done: true }]);
     const logged = (await admin.query(`SELECT path FROM shop.workflow_step WHERE run_id = $1 AND state = 'completed' ORDER BY started_at, path`, [runId])).rows.map(r => r.path);
     assert.deepEqual(logged, ['/steps/0', '/steps/0/branches/rejected/0', '/steps/1']);
+
+    // Liste: Auslöser und Schritte dessen, was läuft; ein abweichender Entwurf ist markiert
+    const listed = async () => {
+      const x = ok(await call('ada', 'GET', '/v1/workflows')).items.find((w: { id: string }) => w.id === id);
+      return [x.trigger, x.stepCount, x.draftChanged, x.openIncidents];
+    };
+    assert.deepEqual(await listed(), [{ manual: {} }, 4, false, 0]);
+    const draft = ok(await call('ada', 'GET', `/v1/workflows/${id}`));
+    ok(await call('ada', 'PUT', `/v1/workflows/${id}`, { revision: draft.revision, definition: { ...draft.definition, steps: [...draft.definition.steps, { id: 'more', set: { x: 1 } }] } }));
+    assert.deepEqual(await listed(), [{ manual: {} }, 4, true, 0], 'zählt die aktive Version, Entwurf weicht ab');
   });
 
   test('Genehmigung «all» und «sequential»: alle müssen zustimmen, Reihenfolge zählt', async () => {

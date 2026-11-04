@@ -97,6 +97,9 @@ export function stepNumberOfPath(path: string, steps?: Step[]): string | null {
   return n || null;
 }
 
+/** Pfad eines ausgeführten Schritts → Pfad in der Definition: Einträge einer Schleife fallen weg (`/steps/2/items/0/steps/1` → `/steps/2/steps/1`). */
+export const definitionPathOf = (path: string) => path.replace(/(?<=\/\d+)\/items\/\d+(?=\/steps(?:\/|$))/g, '');
+
 /** Wo eine Meldung der Prüfung hingehört, in Worten («Auslöser», «Schritt 2.1»). */
 export function placeOfPath(path: string, steps?: Step[]): string {
   if (path.startsWith('/trigger')) return 'Auslöser';

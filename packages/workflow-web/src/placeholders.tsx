@@ -99,7 +99,7 @@ export function contextFields(def: AutomationDefinition, meta: WorkflowMetaJson 
   for (const k of Object.keys(def.variables ?? {})) add({ path: `vars.${k}`, label: k, group: 'Variablen', chip: `Variable · ${k}` });
   add({ path: 'now', label: 'Jetzt (Datum und Zeit)', group: 'Allgemein', chip: 'Jetzt', field: { key: 'now', label: 'Jetzt', type: 'date' } });
   add({ path: 'actor.id', label: 'Handelt als', group: 'Allgemein', chip: 'Handelt als' });
-  add({ path: 'run.id', label: 'ID des Laufs', group: 'Allgemein', chip: 'ID des Laufs' });
+  add({ path: 'run.id', label: 'ID des Runs', group: 'Allgemein', chip: 'ID des Runs' });
   const seen = new Set<string>();
   return out.filter(f => (seen.has(f.path) ? false : (seen.add(f.path), true)));
 }

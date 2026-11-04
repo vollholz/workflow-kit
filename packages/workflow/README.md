@@ -152,7 +152,7 @@ Abbrechen, Massenaktionen und die Ansicht «alle»; `queue:manage` (am `tenantSc
 | `GET /workflows/status` | angemeldet | `{ configured, enabled, available, stage, version }` |
 | `GET /workflows/meta` | `workflow:read` (am Bereich `scopeType`/`scopeId`, sonst `tenantScope`) | Für den Editor: `{ stage, events, actions, subjectTypes (mit fields), stateFields, fieldKinds, stepKinds, operators, unaryOperators, formatters, canActAs, teams }` (Typ `WorkflowMeta`) |
 | `GET`, `PUT /workflows/settings` | `workflow:admin` | Opt-in des Mandanten, Grenzen (nur senken), Zähler des Tages |
-| `GET /workflows` · `POST /workflows` | `workflow:read` · `workflow:manage` | Liste (Filter `state`, `scopeType`, `scopeId`) · Entwurf anlegen |
+| `GET /workflows` · `POST /workflows` | `workflow:read` · `workflow:manage` | Liste (Filter `state`, `scopeType`, `scopeId`; je Eintrag `trigger` und `stepCount` dessen, was läuft, `draftChanged`, `openIncidents`) · Entwurf anlegen (mit `definition`, z. B. aus einer Vorlage) |
 | `GET`, `PUT`, `DELETE /workflows/:id` | `workflow:read` · `workflow:manage` | Entwurf lesen, ändern (`If-Match`), löschen (nur nie aktiv) |
 | `POST /workflows/validate` | angemeldet | `{ ok, errors, stage, warnings }`; `warnings` hindern nicht (leerer Weg, Schritte nach «Beenden») |
 | `POST /workflows/:id/activate` | `workflow:activate` | Version anlegen, Auslöser neu; `actor` wahlweise (W6, `canActAs`) |
@@ -176,7 +176,7 @@ Abbrechen, Massenaktionen und die Ansicht «alle»; `queue:manage` (am `tenantSc
 | `POST /tasks/bulk` | `task:assign` | `{ action: 'assign'\|'cancel', ids (≤ 100), assignee?, queueId?, reason? }` → `{ results, ok, failed }` |
 | `GET /queues`, `GET /queues/:id` | Mitglied, `task:assign` oder `queue:manage` | Warteschlangen mit `member` und `counts` |
 | `GET /queues/:id/members` | wie oben | Mitglieder (`host.members`) mit offener Last – für «Weitergeben» |
-| `GET /queues/teams?q=` | `queue:manage` | Teams zur Auswahl (`host.teams`; ohne Port `{ available: false }`) |
+| `GET /queues/teams?q=&scopeType=&scopeId=` | `queue:manage` oder `workflow:manage` am Bereich | Teams zur Auswahl (`host.teams`; ohne Port `{ available: false }`) |
 | `POST /queues`, `PUT`, `DELETE /queues/:id` | `queue:manage` | Name, Team, Sortierung, Regel (`pull`, `round_robin`, `least_load`), Kalender, `slaTarget`, `escalation`; Ändern und Löschen mit `If-Match`; Löschen nur ohne offene Aufgaben |
 | `GET`, `POST /calendars`, `GET`, `PUT`, `DELETE /calendars/:id` | `queue:manage` | Zeitzone, Arbeitszeiten je Wochentag, Feiertage, `isDefault`; `If-Match`; Löschen nur, wenn keine Warteschlange ihn nutzt |
 | `POST /calendars/preview` | `queue:manage` | `{ duration, from?, calendarId? \| calendar? }` → `{ dueAt }` |

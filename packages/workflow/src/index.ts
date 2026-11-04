@@ -49,7 +49,7 @@ export {
 } from './tasks.ts';
 
 /** Version des Pakets (gleich wie in package.json, geprüft im Test). */
-export const WORKFLOW_PACKAGE_VERSION = '0.6.0';
+export const WORKFLOW_PACKAGE_VERSION = '0.7.0';
 /** Ausbaustufe nach Konzept Abschnitt 13. */
 export const WORKFLOW_STAGE = 2;
 
@@ -159,6 +159,12 @@ export function workflow(o: WorkflowOptions): Workflow {
     // Ereignisse des Baukastens (`workflow.*`) sind als Auslöser erlaubt (mit `includeWorkflowEvents`)
     events: [...o.events.map(e => e.type), ...WORKFLOW_EVENT_TYPES.map(e => e.type)],
     subjectTypes: o.subjects.map(s => s.type),
+    // Pflichtfelder je Aktion aus ihrem Eingabe-Schema (Bezeichnung aus `title`)
+    inputs: Object.fromEntries(o.actions.map(a => {
+      const props = (a.input.properties ?? {}) as Record<string, { title?: unknown }>;
+      const required = Array.isArray(a.input.required) ? (a.input.required as unknown[]).filter((k): k is string => typeof k === 'string') : [];
+      return [a.key, required.map(key => ({ key, title: typeof props[key]?.title === 'string' ? props[key].title as string : key }))];
+    })),
   };
   const validate = (definition: unknown) => validateDefinition(definition, { known, maxForeach: limits.foreachItems });
   const engine = new Engine({

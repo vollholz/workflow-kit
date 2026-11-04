@@ -10,6 +10,38 @@ folgen die Angaben für die Entwickler der App.
 
 ## [Unveröffentlicht]
 
+## [0.7.0] – 2026-11-03
+
+### Für Nutzer
+
+- Die Liste der Workflows sagt je Workflow, wann er startet und wie viele Schritte er hat, ob der Entwurf von der aktiven
+  Version abweicht und wie viele Läufe an einem Schritt anhalten.
+- Wer Workflows in einem Bereich gestaltet, kann Teams als Zuständige wählen, auch ohne Warteschlangen zu verwalten.
+- Die Prüfung meldet leere Pflichtfelder einer Aktion («Pflichtfeld «Status» ist leer») schon im Editor statt erst als
+  Vorfall im Lauf.
+- Lässt sich ein deaktivierter Workflow nicht fortsetzen, weil sein Akteur nicht mehr aktiv ist, sagt die Meldung:
+  «Aktiviere den Workflow mit einem anderen Akteur» (ohne Versionsnummer).
+
+### Für den Betrieb
+
+- (keine)
+
+### Hinzugefügt
+
+- `GET /workflows`: je Eintrag `trigger` und `stepCount` dessen, was läuft (aktive Version, sonst Entwurf),
+  `draftChanged` (Entwurf weicht von der aktiven Version ab) und `openIncidents` (Läufe im Zustand `incident`).
+- `GET /queues/teams`: `scopeType`/`scopeId` (Bereich des Workflows).
+- `walkSteps` ist exportiert (alle Schritte einer Liste mit Pfad, auch in Wegen).
+- `ValidateOptions.known.inputs`: Pflichtfelder je Aktion; `workflow()` füllt sie aus den Eingabe-Schemas (`required`,
+  Bezeichnung aus `title`).
+
+### Geändert
+
+- `GET /queues/teams` erlaubt neben `queue:manage` auch `workflow:manage` am angegebenen Bereich (ohne Bereich: am
+  Bereich des Mandanten).
+- Prüfung: fehlende oder leere Pflichtfelder einer Aktion sind Fehler (`/steps/n/input/<feld>`); bestehende Entwürfe
+  mit solchen Lücken zeigen sie jetzt an und lassen sich erst nach dem Ausfüllen aktivieren.
+
 ## [0.6.0] – 2026-11-03
 
 ### Für Nutzer

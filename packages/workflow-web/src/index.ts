@@ -2,8 +2,10 @@
  * Einstieg `@vollholz/workflow-web`: Provider, Bausteine und Daten-Hooks der Oberfläche. Das Stylesheet liegt getrennt
  * unter `@vollholz/workflow-web/styles.css` (kein Quellmodul importiert CSS).
  *
- * Stufe 1 (Automation): `WorkflowList`, `StepListEditor`, `RunLog`, `SettingsPanel`, `StatusBanner`,
- * `SubjectWorkflowBar`; für die Reiter eines Workflows `VersionList` und `WorkflowSettings`. Stufe 2 (Aufgaben): `MyWork`, `TaskDetail`, `QueueList`, `QueueView`, `QueueEditor`,
+ * Stufe 1 (Automation): `WorkflowList` (mit Vorlagen, `builtinTemplates`), `StepListEditor`, `RunLog`, `RunView`
+ * (Run als Ablauf), `SettingsPanel`, `StatusBanner`, `SubjectWorkflowBar`; für die Reiter eines Workflows `VersionList`
+ * (Vergleich, «Als Entwurf übernehmen») und `WorkflowSettings`; für eine Leiste der App (Kopf «Kontextleiste»)
+ * `NewWorkflowButton`, `WorkflowDraftMark` und `WorkflowActions` (der Editor und `RunView` füllen ihre Plätze über `slots`). Stufe 2 (Aufgaben): `MyWork`, `TaskDetail`, `QueueList`, `QueueView`, `QueueEditor`,
  * `CalendarList`, `CalendarEditor`, Hook `useTaskCounts` für die Navigation. `CaseView` zeigt bis Stufe 3 «noch nicht
  * verfügbar».
  */
@@ -24,10 +26,13 @@ export {
   useSaveCalendar, useSaveQueue, useTask, useTaskAction, useTaskCounts, useTasks, useTeams,
   type DryRunBody, type IncidentAction, type RefetchInterval, type RunFilter, type TaskAction, type TaskFilter, type WorkflowListFilter,
 } from './api.ts';
-export { WorkflowList, type WorkflowListProps } from './WorkflowList.tsx';
+export { NewWorkflowButton, WorkflowList, type NewWorkflowButtonProps, type WorkflowListProps } from './WorkflowList.tsx';
+export { useDraftDiffers, WorkflowActions, WorkflowDraftMark, type WorkflowActionsProps, type WorkflowMenuItem } from './bar.tsx';
 export { StepListEditor, type StepListEditorProps } from './editor.tsx';
 export { VersionList, WorkflowSettings } from './details.tsx';
 export { RunLog, type RunLogProps } from './RunLog.tsx';
+export { RunView, SubjectLink, type RunViewProps } from './run.tsx';
+export { builtinTemplates, type WorkflowTemplate } from './templates.ts';
 export { SettingsPanel, StatusBanner } from './SettingsPanel.tsx';
 export { SubjectWorkflowBar, type SubjectWorkflowBarProps } from './SubjectWorkflowBar.tsx';
 export { describeCondition } from './conditions.tsx';
@@ -37,5 +42,5 @@ export { DueBadge, MyWork, TaskDetail, type MyWorkProps, type TaskDetailProps } 
 export { QueueEditor, QueueList, QueueView, type QueueEditorProps, type QueueListProps, type QueueViewProps } from './queues.tsx';
 export { CalendarEditor, CalendarList, formatHours, parseHours, type CalendarEditorProps } from './calendars.tsx';
 export { AssigneeInput, AssigneeText, PersonInput, TeamInput, describeAssignee } from './assignee.tsx';
-export { fmtDue } from './ui.tsx';
+export { fmtDateTime, fmtDue } from './ui.tsx';
 export type * from './types.ts';

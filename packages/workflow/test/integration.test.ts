@@ -239,7 +239,7 @@ describe('Automation in der App «shop» (PostgreSQL)', { skip }, () => {
     assert.equal(s.enabled, true);
     ok(await call('gus', 'PUT', '/v1/workflows/settings', { enabled: true }));
     const status = ok(await call('ada', 'GET', '/v1/workflows/status'));
-    assert.deepEqual([status.available, status.stage, status.version], [true, 2, '0.6.0']);
+    assert.deepEqual([status.available, status.stage, status.version], [true, 2, '0.7.0']);
     assert.ok(audit.some(e => e.action === 'workflow.settings_changed'));
   });
 
@@ -498,6 +498,7 @@ describe('Automation in der App «shop» (PostgreSQL)', { skip }, () => {
     const run = ok(await call('ada', 'POST', `/v1/workflows/${id}/runs`, {}), 201);
     await drain();
     assert.equal(ok(await call('ada', 'GET', `/v1/workflow-runs/${run.id}`)).state, 'incident');
+    assert.equal(ok(await call('ada', 'GET', '/v1/workflows')).items.find((w: { id: string }) => w.id === id).openIncidents, 1, 'Liste zählt offene Vorfälle');
     ok(await call('ada', 'POST', `/v1/workflow-runs/${run.id}/retry`));
     await drain();
     assert.equal(ok(await call('ada', 'GET', `/v1/workflow-runs/${run.id}`)).state, 'incident', 'zweiter Fehler');

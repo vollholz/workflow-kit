@@ -62,9 +62,9 @@ describe('ActorName und SubjectTitle', () => {
     renderWith(<RunLog />, { props: { actors: { Name }, subjects: { order: { label: 'Bestellung', Title, href: id => `/orders/${id}` } } } });
     const link = await screen.findByRole('link', { name: 'Bestellung Nr. O9' });
     expect(link).toHaveAttribute('href', '/orders/o9');
-    await userEvent.click(screen.getByRole('button', { name: /Lauf vom/ }));
+    await userEvent.click(screen.getByRole('button', { name: /Run vom/ }));
     expect(await screen.findByText('Ben Beispiel')).toBeInTheDocument();
-    expect(screen.getByText('Auslöser').nextElementSibling).toHaveTextContent('Von Hand · von Cara Muster');
+    expect(screen.getByText('Gestartet').nextElementSibling).toHaveTextContent(/· von Cara Muster$/);
     expect(screen.queryByText(/Objekt|o9$/)).toBeNull();
   });
 });

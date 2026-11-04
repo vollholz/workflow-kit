@@ -77,9 +77,9 @@ export function diffDefinitions(before: AutomationDefinition, after: AutomationD
 
 const KIND_LABEL: Record<ChangeKind, string> = { trigger: 'Auslöser', added: 'Neu', removed: 'Entfernt', changed: 'Geändert', moved: 'Verschoben', other: 'Weiteres' };
 
-/** Liste der Änderungen; ohne Änderungen ein kurzer Satz. */
-export function ChangesList({ changes, label = 'Änderungen' }: { changes: DefinitionChange[]; label?: string }) {
-  if (!changes.length) return <p className="wf-muted">Keine Änderungen gegenüber der aktiven Version.</p>;
+/** Liste der Änderungen; ohne Änderungen ein kurzer Satz (`empty`). */
+export function ChangesList({ changes, label = 'Änderungen', empty = 'Keine Änderungen gegenüber der aktiven Version.' }: { changes: DefinitionChange[]; label?: string; empty?: string }) {
+  if (!changes.length) return <p className="wf-muted">{empty}</p>;
   return (
     <ul className="wf-changes" aria-label={label}>
       {changes.map((c, i) => <li key={i} className={`wf-change ${c.kind}`}><span className="wf-change-kind">{KIND_LABEL[c.kind]}</span> {c.text}</li>)}

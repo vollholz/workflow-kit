@@ -140,8 +140,11 @@ export function outcomeName(outcome: string): string {
 }
 
 export interface ValidateOptions {
-  /** Bekannte Schlüssel; fehlt eine Liste, wird nicht dagegen geprüft. */
-  known?: { actions?: Iterable<string>; events?: Iterable<string>; subjectTypes?: Iterable<string> };
+  /**
+   * Bekannte Schlüssel; fehlt eine Liste, wird nicht dagegen geprüft. `inputs`: Pflichtfelder je Aktion (Schlüssel und
+   * Bezeichnung) – ein fehlendes oder leeres Pflichtfeld ist ein Fehler.
+   */
+  known?: { actions?: Iterable<string>; events?: Iterable<string>; subjectTypes?: Iterable<string>; inputs?: Record<string, { key: string; title: string }[]> };
   /** Obergrenze für `foreach.limit` (Standard 1000). */
   maxForeach?: number;
 }
@@ -442,7 +445,7 @@ function schemaErrors(errors: ErrorObject[]): DefinitionError[] {
 }
 
 /** Durchläuft alle Schritte (verschachtelt) mit ihrem Pfad. */
-function* walkSteps(list: Step[] | undefined, base: string): Generator<[Step, string]> {
+export function* walkSteps(list: Step[] | undefined, base: string): Generator<[Step, string]> {
   if (!Array.isArray(list)) return;
   for (const [i, step] of list.entries()) {
     const path = `${base}/${i}`;
@@ -498,6 +501,13 @@ function contentErrors(d: WorkflowDefinition, o: ValidateOptions): DefinitionErr
     else ids.set(step.id, path);
     if ('action' in step && known.actions && !known.actions.has(step.action)) {
       errors.push({ path: `${path}/action`, message: `Unbekannte Aktion «${step.action}»` });
+    }
+    if ('action' in step) {
+      const input = (step.input ?? {}) as Record<string, unknown>;
+      for (const f of o.known?.inputs?.[step.action] ?? []) {
+        const v = input[f.key];
+        if (v === undefined || v === null || (typeof v === 'string' && !v.trim())) errors.push({ path: `${path}/input/${f.key}`, message: `Pflichtfeld «${f.title}» ist leer` });
+      }
     }
     if ('foreach' in step && step.foreach.limit !== undefined && step.foreach.limit > maxForeach) {
       errors.push({ path: `${path}/foreach/limit`, message: `Höchstens ${maxForeach} Einträge je «foreach»` });

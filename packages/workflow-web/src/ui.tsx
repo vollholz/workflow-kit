@@ -7,8 +7,8 @@
  * und geben ihn danach an den Auslöser zurück. Ersetzte Bausteine müssen `id`, `aria-*`, `ref` und `disabled`
  * weiterreichen, damit Beschriftungen und Fokus stimmen.
  */
-import { useEffect, useId, useRef, type ComponentPropsWithRef, type ComponentType, type ReactNode } from 'react';
-import type { ApprovalMode, QueueAssignment, RunState, TaskPriority, TaskSort, TaskState, WorkflowKind, WorkflowState } from './types.ts';
+import { useEffect, useId, useRef, type ComponentPropsWithRef, type ComponentType, type MouseEvent, type ReactNode } from 'react';
+import type { ApprovalMode, QueueAssignment, RunState, TaskPriority, TaskSort, TaskState, WorkflowKind, WorkflowState, WorkflowSummary } from './types.ts';
 
 export type ButtonProps = ComponentPropsWithRef<'button'> & {
   variant?: 'default' | 'primary' | 'danger' | 'ghost';
@@ -124,7 +124,12 @@ export const defaultComponents: WorkflowComponents = { Button, Input, Select, Te
 
 // ---------------------------------------------------------------- Bezeichnungen
 
-export const STATE_LABEL: Record<WorkflowState, string> = { draft: 'Entwurf', active: 'Aktiv', paused: 'Pausiert', archived: 'Archiviert' };
+/**
+ * Zustand eines Workflows, wie er sich zeigt: «Aktiv», «Inaktiv» (noch nie aktiviert oder deaktiviert) oder «Archiviert».
+ * Ob es Änderungen gibt, die noch nicht wirken, zeigt daneben der Marker «Entwurf» (`hasDraft`, `DraftMark`);
+ * Versionsnummern stehen nur bei den Versionen.
+ */
+export const STATE_LABEL: Record<WorkflowState, string> = { draft: 'Inaktiv', active: 'Aktiv', paused: 'Inaktiv', archived: 'Archiviert' };
 export const KIND_LABEL: Record<WorkflowKind, string> = { automation: 'Automation', case: 'Fall', state_model: 'Zustandsmodell' };
 export const RUN_STATE_LABEL: Record<RunState, string> = {
   running: 'Läuft', waiting: 'Wartet', completed: 'Erfolgreich', failed: 'Fehlgeschlagen', incident: 'Vorfall', cancelled: 'Abgebrochen',
@@ -148,14 +153,46 @@ export const SORT_LABEL: Record<TaskSort, string> = { urgency: 'Dringlichkeit', 
 /** Bezeichnung eines Ergebnisses (feste Ergebnisse übersetzt, eigene unverändert). */
 export const outcomeLabel = (o: string | null | undefined) =>
   (o ? ({ approved: 'Genehmigt', rejected: 'Abgelehnt', cancelled: 'Abgebrochen', done: 'Erledigt' } as Record<string, string>)[o] ?? o : '');
-export const taskTone = (s: TaskState) => (s === 'done' ? 'ok' : s === 'cancelled' ? 'muted' : s === 'in_progress' ? 'accent' : 'warn');
+export const taskTone = (s: TaskState) => (s === 'done' ? 'ok' : s === 'cancelled' ? 'muted' : s === 'in_progress' ? 'info' : 'warn');
 export const priorityTone = (p: TaskPriority) => (p === 'urgent' ? 'bad' : p === 'high' ? 'warn' : 'muted');
 
-export function Badge({ tone, children }: { tone: 'ok' | 'bad' | 'warn' | 'muted' | 'accent'; children: ReactNode }) {
+/**
+ * Farbe eines Zustands: grün nur für «gut / wirkt» (aktiv, erfolgreich, erledigt), blau für «noch in Arbeit» (läuft,
+ * wartet), gelb für «braucht Aufmerksamkeit», rot für Fehler, grau für «wirkt nicht» (inaktiv, archiviert). `draft`
+ * (grau) ist der Marker «Entwurf»; `accent` bleibt für Merkmale ohne Zustand (Mitglied, Standard).
+ */
+export type BadgeTone = 'ok' | 'bad' | 'warn' | 'muted' | 'accent' | 'info' | 'draft';
+export function Badge({ tone, children }: { tone: BadgeTone; children: ReactNode }) {
   return <span className={`wf-badge ${tone}`}>{children}</span>;
 }
-export const stateTone = (s: WorkflowState) => (s === 'active' ? 'ok' : s === 'paused' ? 'warn' : s === 'archived' ? 'muted' : 'accent');
-export const runTone = (s: RunState) => (s === 'completed' ? 'ok' : s === 'incident' || s === 'failed' ? 'bad' : s === 'cancelled' ? 'muted' : 'accent');
+export const stateTone = (s: WorkflowState) => (s === 'active' ? 'ok' : 'muted');
+/** Gibt es Änderungen, die noch nicht wirken? Bei nie aktivierten Workflows immer; archivierte haben keinen Entwurf mehr. */
+export const hasDraft = (w: Pick<WorkflowSummary, 'state' | 'activeVersion' | 'draftChanged'>, differs = !!w.draftChanged) =>
+  w.state !== 'archived' && (w.activeVersion === null || differs);
+/** Marker «Entwurf» (grau) neben dem Zustand bzw. dem Namen; mit `onOpen` ein Knopf, der den Entwurf im Editor öffnet. */
+export function DraftMark({ onOpen }: { onOpen?: () => void } = {}) {
+  if (!onOpen) return <Badge tone="draft">Entwurf</Badge>;
+  return <button type="button" className="wf-badge draft wf-badge-btn" title="Entwurf im Editor öffnen" onClick={onOpen}>Entwurf</button>;
+}
+/** JSON mit sortierten Schlüsseln: gleiche Definition, gleicher Text (Entwurf und Version vergleichen). */
+export const canonical = (v: unknown): string => JSON.stringify(v, (_k, x: unknown) =>
+  x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map(k => [k, (x as Record<string, unknown>)[k]])) : x);
+export const runTone = (s: RunState) => (s === 'completed' ? 'ok' : s === 'incident' || s === 'failed' ? 'bad' : s === 'cancelled' ? 'muted' : 'info');
+
+/**
+ * Ganze Tabellenzeile mit der Maus klickbar; per Tastatur bleibt der Knopf in der ersten Zelle. Klicks auf Links,
+ * Knöpfe und Felder in der Zeile wirken für sich, markierter Text öffnet nichts.
+ */
+export function rowLink(open: () => void) {
+  return {
+    className: 'wf-row-link',
+    onClick: (e: MouseEvent<HTMLTableRowElement>) => {
+      if ((e.target as Element).closest('a, button, input, select, textarea, label, summary')) return;
+      if (window.getSelection()?.toString()) return;
+      open();
+    },
+  };
+}
 
 /** Hinweis, dass ein Recht fehlt; `lead` beginnt den Satz («Zum Bearbeiten»). */
 export function MissingRight({ perm, lead }: { perm: string; lead: string }) {

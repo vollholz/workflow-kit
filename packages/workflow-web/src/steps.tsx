@@ -132,7 +132,7 @@ export function summary(s: Step, meta: WorkflowMetaJson | undefined, fields: Con
   if ('foreach' in s) return `Für jeden Eintrag in ${s.foreach.items ? describeTemplate(s.foreach.items, fields) : '…'}`;
   if ('wait' in s) return s.wait.duration ? `Warten: ${describeDuration(s.wait.duration)}` : s.wait.until ? `Warten bis ${describeTemplate(s.wait.until, fields)}` : 'Warten auf ein Ereignis';
   if ('set' in s) return `Setzt ${Object.keys(s.set).join(', ') || '…'}`;
-  if ('end' in s) return `Lauf beenden: ${END_LABEL[s.end.result]}`;
+  if ('end' in s) return `Run beenden: ${END_LABEL[s.end.result]}`;
   if ('task' in s) return `Aufgabe «${s.task.title || '…'}» für ${describeAssignee(s.task.assignee)}${s.task.due ? `, Frist ${describeDuration(s.task.due)}` : ''}`;
   if ('approval' in s) return `Genehmigung «${s.approval.title || '…'}» bei ${s.approval.approvers.map(a => describeAssignee(a)).join(', ')}`;
   return `${STEP_KIND_LABEL[kindOf(s)] ?? 'Schritt'} (folgt in einer späteren Stufe)`;
@@ -186,7 +186,7 @@ export function CommonFields({ step, onChange, name }: { step: Step; onChange: (
           <div className="wf-field">
             <label htmlFor={`${id}-t`}>Danach</label>
             <ui.Select id={`${id}-t`} value={oe.then ?? 'incident'} aria-describedby={`${id}-th`} onChange={e => setOe({ ...oe, then: e.target.value as OnError['then'] })}>
-              <option value="incident">Vorfall: Lauf hält an</option>
+              <option value="incident">Vorfall: Run hält an</option>
               <option value="continue">Weiter mit dem nächsten Schritt</option>
               {oe.then === 'path' ? <option value="path">Eigener Fehlerpfad</option> : null}
             </ui.Select>
