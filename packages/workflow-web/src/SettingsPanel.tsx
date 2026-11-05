@@ -10,8 +10,8 @@ import type { WorkflowLimitsJson, WorkflowStatusJson } from './types.ts';
 import { MissingRight, plural } from './ui.tsx';
 
 const LIMIT_LABEL: Record<keyof WorkflowLimitsJson, string> = {
-  activeWorkflows: 'Aktive Workflows', runsPerDay: 'Läufe pro Tag', stepsPerRun: 'Schritte pro Lauf', foreachItems: 'Einträge je «Für jedes»',
-  httpCallsPerDay: 'Aufrufe nach aussen pro Tag', chainDepth: 'Kettentiefe (Workflow löst Workflow aus)', runsPerSubjectPerMinute: 'Läufe je Bezug und Minute',
+  activeWorkflows: 'Aktive Workflows', runsPerDay: 'Runs pro Tag', stepsPerRun: 'Schritte pro Run', foreachItems: 'Einträge je «Für jedes»',
+  httpCallsPerDay: 'Aufrufe nach aussen pro Tag', chainDepth: 'Kettentiefe (Workflow löst Workflow aus)', runsPerSubjectPerMinute: 'Runs je Bezug und Minute',
 };
 
 /** Hinweis zum Zustand des Moduls; nichts, wenn alles verfügbar ist. */
@@ -33,7 +33,8 @@ export function StatusBanner({ status, onSetup }: { status: WorkflowStatusJson |
   );
 }
 
-export function SettingsPanel() {
+/** `showTitle={false}`: Überschrift nur für Screenreader, wenn die App den Bereich im Seitenkopf nennt. */
+export function SettingsPanel({ showTitle = true }: { showTitle?: boolean } = {}) {
   const w = useWorkflow();
   const { ui } = w;
   const id = useId();
@@ -51,7 +52,7 @@ export function SettingsPanel() {
   }, [settings.data]);
   if (status.isPending) return <ui.Loading label="Einstellungen werden geladen …" />;
   if (status.isError) return <ui.ErrorBox error={status.error} onRetry={() => void status.refetch()} />;
-  const head = <h2 id={`${id}-h`}>Workflows einrichten</h2>;
+  const head = <h2 id={`${id}-h`} className={showTitle ? undefined : 'wf-sr'}>Workflows einrichten</h2>;
   if (!status.data.enabled) return <section aria-labelledby={`${id}-h`} className="wf-settings">{head}<StatusBanner status={status.data} /></section>;
   if (!admin) return <section aria-labelledby={`${id}-h`} className="wf-settings">{head}<StatusBanner status={status.data} /><MissingRight perm="workflow:admin" lead="Zum Einrichten" /></section>;
   if (settings.isPending) return <ui.Loading label="Einstellungen werden geladen …" />;
@@ -76,7 +77,7 @@ export function SettingsPanel() {
         <button type="button" role="switch" id={`${id}-on`} aria-checked={enabled} className={`wf-switch${enabled ? ' on' : ''}`} onClick={() => setEnabled(e => !e)}>
           <span aria-hidden="true" />
         </button>
-        <label htmlFor={`${id}-on`}>Workflows für diesen Mandanten einschalten</label>
+        <label htmlFor={`${id}-on`}>Workflows für diese Organisation einschalten</label>
       </div>
       <p className="wf-hint">Ausgeschaltet starten keine Workflows mehr; Entwürfe, Versionen und Protokolle bleiben erhalten.</p>
       <fieldset className="wf-limits">
@@ -91,7 +92,7 @@ export function SettingsPanel() {
           </div>
         ))}
       </fieldset>
-      <p className="wf-hint">{`Heute: ${plural(s.usage.runs, 'Lauf', 'Läufe')} (${s.usage.runsRejected} abgewiesen), ${plural(s.usage.steps, 'Schritt', 'Schritte')}, ${plural(s.usage.httpCalls, 'Aufruf', 'Aufrufe')} nach aussen, ${plural(s.usage.activeWorkflows, 'aktiver Workflow', 'aktive Workflows')}.`}</p>
+      <p className="wf-hint">{`Heute: ${plural(s.usage.runs, 'Run', 'Runs')} (${s.usage.runsRejected} abgewiesen), ${plural(s.usage.steps, 'Schritt', 'Schritte')}, ${plural(s.usage.httpCalls, 'Aufruf', 'Aufrufe')} nach aussen, ${plural(s.usage.activeWorkflows, 'aktiver Workflow', 'aktive Workflows')}.`}</p>
       <div className="wf-row">
         <ui.Button variant="primary" disabled={save.isPending || invalid.length > 0} onClick={submit}>{save.isPending ? 'Speichert …' : 'Speichern'}</ui.Button>
         <span role="status" aria-live="polite" className="wf-ok">{saved ? 'Gespeichert.' : ''}</span>

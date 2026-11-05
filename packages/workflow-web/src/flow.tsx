@@ -9,7 +9,7 @@
  * Regeln:
  * - Auswahl über Pfade: Auslöser (`trigger`), Schritt (`/steps/1/then/0`), Stelle zum Einfügen (Liste und Index).
  * - Tastatur auf den Karten: ↓/↑ oder J/K wechseln, Alt+↓/↑ verschiebt im eigenen Weg, Entf entfernt (Rückgängig bietet
- *   der Editor), + fügt danach ein, Enter springt ins Formular.
+ *   der Editor), + fügt danach ein, Ctrl+D dupliziert, Enter springt ins Formular.
  * - Die Definition ändert sich nur über die reinen Hilfen (`withList`, `listAt`, `stepAt`, `splitPath`).
  * - Ohne `workflow:manage` (nur lesbar) gibt es keine Stellen zum Einfügen; Karten lassen sich trotzdem öffnen.
  * - Das Sheet hält den Fokus, Esc oder ein Klick daneben schliesst es, danach geht der Fokus zurück an den Auslöser.
@@ -17,6 +17,8 @@
  *   Weg ohne Folgeschritt trägt den Hinweis «Hier geschieht nichts». Fehler und Hinweise der Prüfung stehen an der Karte.
  * - Probelauf im Ablauf (`run`): Jede Karte zeigt, was geschähe; nicht erreichte Schritte und Wege sind blass. Bei Aufgabe
  *   und Genehmigung lässt sich das angenommene Ergebnis wählen, der Probelauf läuft dann neu. Einfügen gibt es dabei nicht.
+ * - Etappe 4: Derselbe Ablauf zeigt einen Lauf (`run.live`): was geschah, mit Zeiten und Namen; der Schritt, an dem der
+ *   Lauf steht, ist hervorgehoben; ein Vorfall steht an seinem Schritt (`run.below`).
  */
 import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useWorkflow } from './provider.tsx';
@@ -102,12 +104,40 @@ function triggerSub(title: string, text: ReactNode): ReactNode {
   return rest ? rest[0]!.toUpperCase() + rest.slice(1) : null;
 }
 
-/** Probelauf im Ablauf: Ergebnis je Schritt (Pfad); das angenommene Ergebnis einer Aufgabe/Genehmigung ist wählbar. */
+/** Ergebnis eines Schritts auf der Karte: aus dem Probelauf oder aus einem Lauf. */
+export type FlowStepResult = DryRunStepJson & {
+  /** Lauf: Hier steht der Lauf gerade (wartet oder läuft). */
+  active?: boolean;
+  /** Lauf: Der Schritt wurde nach einem Vorfall übersprungen. */
+  skipped?: boolean;
+  /** Lauf: Text der Karte mit Namen und Zeiten (statt `summary`). */
+  text?: ReactNode;
+};
+
+/** Ergebnis je Schritt (Pfad) auf den Karten: Probelauf (was geschähe) oder Lauf (was geschah). */
 export interface FlowRun {
-  steps: Map<string, DryRunStepJson>;
+  steps: Map<string, FlowStepResult>;
   triggerMatches: boolean | null;
-  onAssume: (stepId: string, outcome: string) => void;
+  /** Probelauf: angenommenes Ergebnis einer Aufgabe/Genehmigung wählen. */
+  onAssume?: (stepId: string, outcome: string) => void;
   busy?: boolean;
+  /** Tatsächlicher Lauf statt Probelauf; `open`: Der Lauf ist noch nicht beendet. */
+  live?: { open: boolean };
+  /** Zusatz unter der Karte eines Schritts (z. B. «Vorfall lösen»). */
+  below?: (path: string) => ReactNode;
+}
+
+const RUN_TEXT = {
+  dry: { skip: 'wird nicht erreicht', active: 'durchlaufen', bad: 'würde scheitern', ok: 'durchlaufen', jumped: 'durchlaufen' },
+  open: { skip: 'noch nicht erreicht', active: 'hier steht der Run', bad: 'fehlgeschlagen', ok: 'erledigt', jumped: 'übersprungen' },
+  done: { skip: 'nicht erreicht', active: 'hier steht der Run', bad: 'fehlgeschlagen', ok: 'erledigt', jumped: 'übersprungen' },
+} as const;
+const RUN_ICON = { ok: '✓', bad: '✕', active: '…', jumped: '↷' } as const;
+
+/** Eingabe einer neuen Aktion mit den Vorgabewerten ihres Schemas (z. B. `{{subject.id}}` für den Bezug). */
+function defaultInput(schema: Record<string, unknown> | undefined): Record<string, unknown> {
+  const props = (schema?.properties ?? {}) as Record<string, { default?: unknown }>;
+  return Object.fromEntries(Object.entries(props).filter(([, p]) => p && p.default !== undefined).map(([k, p]) => [k, p.default]));
 }
 
 export interface FlowViewProps {
@@ -125,11 +155,13 @@ export interface FlowViewProps {
   /** Schritt im eigenen Weg verschieben; gibt den neuen Pfad zurück (oder null am Rand). */
   onMove: (path: string, delta: -1 | 1) => string | null;
   onRemove: (path: string) => void;
+  /** Schritt duplizieren (Ctrl+D); die Kopie steht direkt danach. */
+  onDuplicate?: (path: string) => void;
   /** Formular des gewählten Schritts fokussieren (Enter). */
   onOpen: () => void;
 }
 
-export function FlowView({ steps, run, locked, trigger, sel, onSelect, onAddFirst, onMove, onRemove, onOpen }: FlowViewProps) {
+export function FlowView({ steps, run, locked, trigger, sel, onSelect, onAddFirst, onMove, onRemove, onDuplicate, onOpen }: FlowViewProps) {
   const ed = useEditor();
   const warnings = ed.warnings ?? [];
   const editable = !ed.readOnly && !run && !locked;
@@ -159,6 +191,7 @@ export function FlowView({ steps, run, locked, trigger, sel, onSelect, onAddFirs
     if (e.key === 'Enter') { e.preventDefault(); onSelect(isStep ? { kind: 'step', path: key } : { kind: 'trigger' }); onOpen(); return; }
     if (!editable) return;
     if (e.key === 'Delete' && isStep) { e.preventDefault(); onRemove(key); return; }
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'd' && isStep && onDuplicate) { e.preventDefault(); onDuplicate(key); focusKey.current = `${splitPath(key).list}/${splitPath(key).index + 1}`; return; }
     if (e.key === '+') {
       e.preventDefault();
       if (isStep) { const { list, index } = splitPath(key); onSelect({ kind: 'insert', list, index: index + 1 }); }
@@ -185,7 +218,8 @@ export function FlowView({ steps, run, locked, trigger, sel, onSelect, onAddFirs
       </button>
     </li>
   ));
-  const renderList = (list: string, items: Step[], prefix: string, label: string, firstWhere: string): ReactNode => (
+  /** `dead`: Weg, den der Lauf nicht genommen hat – was darin steht, wird nie erreicht. */
+  const renderList = (list: string, items: Step[], prefix: string, label: string, firstWhere: string, dead = false): ReactNode => (
     <ol className="wf-flow" aria-label={label}>
       {items.map((s, i) => {
         const path = `${list}/${i}`;
@@ -194,49 +228,53 @@ export function FlowView({ steps, run, locked, trigger, sel, onSelect, onAddFirs
         const hints = run ? 0 : ownErrors(warnings, path).length;
         const kind = STEP_KIND_LABEL[kindOf(s)] ?? 'Schritt', title = titleOnly(s, ed.meta?.actions, ed.allFields ?? ed.fields);
         const r = run?.steps.get(path);
-        const runState = !run ? null : !r ? 'skip' : r.error || r.allowed === false ? 'bad' : 'ok';
-        const runText = runState === 'skip' ? 'wird nicht erreicht' : runState === 'bad' ? 'würde scheitern' : runState === 'ok' ? 'durchlaufen' : '';
+        const runState = !run ? null : !r ? 'skip' : r.active ? 'active' : r.error || r.allowed === false ? 'bad' : r.skipped ? 'jumped' : 'ok';
+        const texts = !run?.live ? RUN_TEXT.dry : run.live.open && !dead ? RUN_TEXT.open : RUN_TEXT.done;
+        const runText = runState ? texts[runState] : '';
         const issues = [errs ? plural(errs, 'Fehler', 'Fehler') : '', hints ? plural(hints, 'Hinweis', 'Hinweise') : ''].filter(Boolean).join(', ');
-        const taken = (way: string) => (!run || !r ? undefined : 'if' in s ? (way === 'then') === ((r.output as { result?: unknown } | undefined)?.result === true) : r.outcome === way);
+        // Genommener Weg: erst nach dem Ergebnis (solange der Lauf auf den Entscheid wartet, ist keiner ausgeschlossen)
+        const taken = (way: string) => (!run || !r || r.active ? undefined : 'if' in s ? (way === 'then') === ((r.output as { result?: unknown } | undefined)?.result === true)
+          : r.outcome === undefined ? undefined : r.outcome === way);
         return (
           <Fragment key={s.id}>
             {link(list, i, i === 0 ? firstWhere : `nach Schritt ${prefix}${i}`)}
             <li className={`wf-flow-item t-${tone(s)}${runState ? ` run-${runState}` : ''}`}>
               <button type="button" className="wf-card" data-flow={path} aria-current={isSel(path) || undefined}
-                aria-label={`Schritt ${n}: ${stepTitle(s, ed.meta)}${issues ? `, ${issues}` : ''}${runText ? `, im Probelauf ${runText}` : ''}`} aria-describedby={`${baseId}-${path}`}
+                aria-label={`Schritt ${n}: ${stepTitle(s, ed.meta)}${issues ? `, ${issues}` : ''}${runText ? `, ${run?.live ? 'im Run' : 'im Probelauf'} ${runText}` : ''}`} aria-describedby={`${baseId}-${path}`}
                 onClick={() => onSelect({ kind: 'step', path })} onKeyDown={e => onKey(e, path)}>
                 <span className="wf-card-icon" aria-hidden="true">{n}</span>
                 <span className="wf-card-body" id={`${baseId}-${path}`}>
                   {title === kind ? null : <span className="wf-card-kind">{kind}</span>}
                   <span className="wf-card-title">{title}</span>
-                  {run ? <span className="wf-card-sub">{r ? (r.error?.message ?? (r.allowed === false ? `Dem Akteur fehlen Rechte: ${(r.missing ?? []).join(', ')}` : r.summary)) : 'Wird nicht erreicht'}</span> : <FlowSub step={s} />}
+                  {run ? <span className="wf-card-sub">{r ? (r.error?.message ?? (r.allowed === false ? `Dem Akteur fehlen Rechte: ${(r.missing ?? []).join(', ')}` : r.text ?? r.summary)) : texts.skip[0]!.toUpperCase() + texts.skip.slice(1)}</span> : <FlowSub step={s} />}
                 </span>
-                {errs || hints || runState === 'ok' || runState === 'bad' ? (
+                {errs || hints || (runState && runState !== 'skip') ? (
                   <span className="wf-card-tags">
                     {errs ? <span className="wf-card-err">{plural(errs, 'Fehler', 'Fehler')}</span> : null}
                     {hints ? <span className="wf-card-warn">{plural(hints, 'Hinweis', 'Hinweise')}</span> : null}
-                    {runState === 'ok' || runState === 'bad' ? <span className={`wf-card-run ${runState}`} aria-hidden="true">{runState === 'ok' ? '✓' : '✕'}</span> : null}
+                    {runState && runState !== 'skip' ? <span className={`wf-card-run ${runState}`} aria-hidden="true">{RUN_ICON[runState]}</span> : null}
                   </span>
                 ) : null}
               </button>
-              {run && r?.outcomes && r.outcomes.length > 1 ? (
+              {run?.onAssume && r?.outcomes && r.outcomes.length > 1 ? (
                 <div className="wf-assume" role="group" aria-label={`Angenommenes Ergebnis von Schritt ${n}`}>
                   <span className="wf-assume-label" aria-hidden="true">Angenommen:</span>
                   {r.outcomes.map(o => (
                     <button key={o} type="button" aria-pressed={r.outcome === o} aria-disabled={run.busy || undefined}
-                      onClick={() => { if (!run.busy && r.outcome !== o) run.onAssume(s.id, o); }}>{outcomeLabel(o)}</button>
+                      onClick={() => { if (!run.busy && r.outcome !== o) run.onAssume!(s.id, o); }}>{outcomeLabel(o)}</button>
                   ))}
                 </div>
               ) : null}
+              {run?.below?.(path)}
               {'if' in s ? (
                 <div className="wf-flow-lanes">
-                  <Lane title="Dann" taken={taken('then')}>{renderList(`${path}/then`, s.then, `${n}.`, `Dann in Schritt ${n}`, `am Anfang von «Dann» in Schritt ${n}`)}</Lane>
-                  <Lane title="Sonst" taken={taken('else')}>{renderList(`${path}/else`, s.else ?? [], `${n}.s`, `Sonst in Schritt ${n}`, `am Anfang von «Sonst» in Schritt ${n}`)}</Lane>
+                  <Lane title="Dann" taken={taken('then')}>{renderList(`${path}/then`, s.then, `${n}.`, `Dann in Schritt ${n}`, `am Anfang von «Dann» in Schritt ${n}`, dead || taken('then') === false)}</Lane>
+                  <Lane title="Sonst" taken={taken('else')}>{renderList(`${path}/else`, s.else ?? [], `${n}.s`, `Sonst in Schritt ${n}`, `am Anfang von «Sonst» in Schritt ${n}`, dead || taken('else') === false)}</Lane>
                 </div>
               ) : null}
               {'foreach' in s ? (
                 <div className="wf-flow-lanes one">
-                  <Lane title="Für jeden Eintrag">{renderList(`${path}/steps`, s.steps, `${n}.`, `Für jeden Eintrag in Schritt ${n}`, `am Anfang der Schleife in Schritt ${n}`)}</Lane>
+                  <Lane title="Für jeden Eintrag">{renderList(`${path}/steps`, s.steps, `${n}.`, `Für jeden Eintrag in Schritt ${n}`, `am Anfang der Schleife in Schritt ${n}`, dead)}</Lane>
                 </div>
               ) : null}
               {hasWays(s) ? (
@@ -246,7 +284,7 @@ export function FlowView({ steps, run, locked, trigger, sel, onSelect, onAddFirs
                     const label = outcomeLabel(o) || '…';
                     return (
                       <Lane key={`${k}:${o}`} title={label} taken={taken(o)} hint={!run && warnings.some(w => w.path === lp) ? 'Hier geschieht nichts' : undefined}>
-                        {renderList(lp, branchesOf(s)[o] ?? [], `${n}.${wayLetter(k)}`, `Weg «${label}» in Schritt ${n}`, `am Anfang von «${label}» in Schritt ${n}`)}
+                        {renderList(lp, branchesOf(s)[o] ?? [], `${n}.${wayLetter(k)}`, `Weg «${label}» in Schritt ${n}`, `am Anfang von «${label}» in Schritt ${n}`, dead || taken(o) === false)}
                       </Lane>
                     );
                   })}
@@ -300,7 +338,7 @@ export function FlowView({ steps, run, locked, trigger, sel, onSelect, onAddFirs
 /** Weg unter einem Schritt; im Probelauf ist der nicht genommene Weg blass (`taken === false`). */
 function Lane({ title, hint, taken, children }: { title: string; hint?: string | undefined; taken?: boolean | undefined; children: ReactNode }) {
   return (
-    <div className={`wf-lane${taken === false ? ' skip' : taken ? ' taken' : ''}`}>
+    <div className={`wf-lane${taken === false ? ' wf-lane-skip' : taken ? ' taken' : ''}`}>
       <span className="wf-lane-label">{title}</span>
       {hint ? <span className="wf-lane-hint">{hint}</span> : null}
       {children}
@@ -355,7 +393,7 @@ const KIND_HINT: Partial<Record<StepKindName, [string, string]>> = {
   foreach: ['Ablauf steuern', 'Schritte für jeden Eintrag einer Liste.'],
   wait: ['Ablauf steuern', 'Eine Dauer lang oder bis zu einem Zeitpunkt warten.'],
   set: ['Ablauf steuern', 'Werte für spätere Schritte merken.'],
-  end: ['Ablauf steuern', 'Den Lauf hier beenden, mit Ergebnis.'],
+  end: ['Ablauf steuern', 'Den Run hier beenden, mit Ergebnis.'],
   action: ['Aktionen', 'Aktion später wählen.'],
 };
 
@@ -380,7 +418,7 @@ function usePickGroups(): PickGroup[] {
     if (ed.meta?.actions.length) {
       for (const a of ed.meta.actions) {
         const hint = typeof a.input?.description === 'string' ? a.input.description : '';
-        items.push({ key: `a:${a.key}`, group: a.group, label: a.label, hint, make: () => ({ id: ed.newId(), action: a.key, input: {} }) });
+        items.push({ key: `a:${a.key}`, group: a.group, label: a.label, hint, make: () => ({ id: ed.newId(), action: a.key, input: defaultInput(a.input) }) });
       }
     } else kindItem('action');
   }
@@ -487,8 +525,9 @@ export function TriggerSheet({ onPick, onClose }: { onPick: (kind: 'event' | 'sc
 // ---------------------------------------------------------------- Detail eines Schritts
 
 /** Formular des gewählten Schritts mit Nummer, Titel, Werkzeugen (↑, ↓, entfernen) und Hinweisen der Prüfung. */
-export function StepDetail({ step, path, last, onChange, onRemove, onMove }: {
+export function StepDetail({ step, path, last, onChange, onRemove, onMove, onDuplicate }: {
   step: Step; path: string; /** Letzter Schritt seines Wegs? */ last: boolean; onChange: (s: Step) => void; onRemove: () => void; onMove: (delta: -1 | 1) => void;
+  onDuplicate?: () => void;
 }) {
   const ed = useEditor();
   const { ui } = useWorkflow();
@@ -509,6 +548,7 @@ export function StepDetail({ step, path, last, onChange, onRemove, onMove }: {
           <div className="wf-step-tools">
             <ui.Button size="sm" variant="ghost" disabled={index === 0} onClick={() => onMove(-1)} aria-label={`${name} nach oben`}>↑</ui.Button>
             <ui.Button size="sm" variant="ghost" disabled={last} onClick={() => onMove(1)} aria-label={`${name} nach unten`}>↓</ui.Button>
+            {onDuplicate ? <ui.Button size="sm" variant="ghost" onClick={onDuplicate} aria-label={`${name} duplizieren`} title="Duplizieren (Ctrl+D)">⧉</ui.Button> : null}
             <ui.Button size="sm" variant="ghost" onClick={onRemove} aria-label={`${name} entfernen`}>✕</ui.Button>
           </div>
         ) : null}

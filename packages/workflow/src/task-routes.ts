@@ -475,10 +475,20 @@ export function registerTaskRoutes(app: FastifyInstance, o: RouteOptions, h: Tas
 
   app.get(`${prefix}/queues/teams`, {
     attachValidation: true,
-    schema: { querystring: { type: 'object', additionalProperties: false, properties: { q: { type: 'string', maxLength: 200 }, limit: { type: 'integer', minimum: 1, maximum: 50, default: 20 } } } },
+    schema: {
+      querystring: {
+        type: 'object', additionalProperties: false,
+        properties: {
+          q: { type: 'string', maxLength: 200 }, limit: { type: 'integer', minimum: 1, maximum: 50, default: 20 },
+          scopeType: { type: 'string', minLength: 1, maxLength: 80 }, scopeId: { type: 'string', minLength: 1, maxLength: 200 },
+        },
+      },
+    },
   }, async req => handle(req, true, async (tx, actor) => {
-    await need(tx, actor, 'queue:manage', o.tenantScope);
-    const q = req.query as { q?: string; limit: number };
+    const q = req.query as { q?: string; limit: number; scopeType?: string; scopeId?: string };
+    // Teams wählt, wer Warteschlangen verwaltet oder Workflows im Bereich gestaltet (Zuständige im Editor)
+    const scope = q.scopeType && q.scopeId ? { type: q.scopeType, id: q.scopeId } : o.tenantScope;
+    if (!(await host.can(tx, actor, 'workflow:manage', scope))) await need(tx, actor, 'queue:manage', o.tenantScope);
     if (!host.teams) return { available: false, items: [] };
     const items = await host.teams(tx, { search: q.q ?? '', limit: q.limit });
     return { available: true, items: items.slice(0, q.limit).map(t => ({ type: t.type, id: t.id, label: t.label, ...(t.group ? { group: t.group } : {}) })) };

@@ -10,6 +10,88 @@ folgen die Angaben für die Entwickler der App.
 
 ## [Unveröffentlicht]
 
+## [0.8.0] – 2026-11-05
+
+### Für Nutzer
+
+- Ein Lauf erscheint als Ablauf: derselbe Ablauf wie im Editor mit dem Weg, den der Lauf genommen hat, mit Zeiten und
+  Namen (wer erledigt oder entschieden hat). Der Schritt, an dem der Lauf steht, ist hervorgehoben; nicht erreichte
+  Schritte und Wege sind blass. Ein Vorfall steht an seinem Schritt mit «Nochmals versuchen» und «Schritt überspringen»;
+  «Lauf abbrechen» steht im Menü.
+- Hält ein Lauf an einem Schritt an, sagt das die Leiste des Workflows («1 Lauf hält an»); die Hauptaktion ist dann
+  «Vorfall ansehen».
+- Versionen lassen sich vergleichen (mit der vorherigen, einer anderen Version oder dem Entwurf), ihr Ablauf ansehen und
+  «Als Entwurf übernehmen»; wirksam wird das erst mit dem Aktivieren.
+- «Neu» bietet Vorlagen an (Genehmigung einholen, Aufgabe mit Rückmeldung, regelmässig nach Zeitplan; dazu die der App).
+- Die Liste zeigt jeden Workflow als Satz («Bei «Bestellung eingegangen» · 3 Schritte») und offene Vorfälle.
+- Ein Workflow ist «Aktiv», «Inaktiv» (noch nie aktiviert oder deaktiviert) oder «Archiviert»; daneben steht «Entwurf»,
+  solange Änderungen noch nicht wirken. Versionsnummern stehen nur noch unter «Versionen»; dort steht der Entwurf über
+  den Versionen («wird Version 3»). Aus «Pausieren» wird «Deaktivieren», aus «Fortsetzen» «Aktivieren», aus «Version n
+  aktivieren …» «Entwurf aktivieren …». Hat das System einen Workflow deaktiviert, weil sein Akteur nicht mehr aktiv
+  ist, wählt man beim Aktivieren einen anderen. Die Liste filtert auch nach «Inaktiv» und «Mit Entwurf».
+- Im Lauf steht keine Versionsnummer mehr; lief er mit einer früheren Fassung, steht «ältere Fassung».
+- Den Entwurf eines aktiven oder deaktivierten Workflows verwirft «Änderungen verwerfen …»; «Workflow löschen …» gibt es,
+  solange er nie aktiv war.
+- Tastenkürzel im Ablauf: `P` wechselt zwischen Bearbeiten und Probelauf, `Ctrl`+`D` dupliziert einen Schritt,
+  `Ctrl`+`Z` macht rückgängig, `Ctrl`+`Y` wiederholt; «Tastenkürzel» im Menü listet alle.
+- Teams lassen sich als Zuständige auch ohne das Recht «Warteschlangen verwalten» wählen, wenn man Workflows gestaltet.
+- Eine neue Aktion übernimmt die Vorgaben der App (z. B. den Bezug, um den es geht), statt leer zu starten.
+- In den Listen der Workflows, Läufe und Versionen ist die ganze Zeile anklickbar; Links in Tabellen sind nicht mehr
+  unterstrichen (erst beim Darüberfahren), die Startzeit eines Laufs ist nicht mehr fett.
+- Farben der Zustände: Grün heisst nur noch «wirkt / erfolgreich»; «läuft», «wartet» und «in Arbeit» sind blau, «Inaktiv»
+  und «Archiviert» grau, der Marker «Entwurf» ebenfalls grau. «Entwurf» in der Liste führt zum Editor.
+- Aus «Lauf» wird «Run»: Runs eines Workflows, «Run abbrechen», «1 Run hält an», Grenzen «Runs pro Tag» und «Schritte
+  pro Run». Workflows schaltet man «für diese Organisation» ein.
+- Die Liste zeigt je Workflow den letzten Run mit Datum und Zeit (öffnet ihn) und seinen Zustand statt der Zähler der
+  letzten Läufe und des Akteurs; schmal bleiben Name, Zustand und Zustand des Runs.
+- Für einen Kopf, der als eine Leiste stehen bleibt (wenn die App ihn so baut): Zustand, Hauptaktion und Menü des
+  Workflows und des Runs stehen dort, «Entwurf» neben dem Namen; über dem Ablauf bleiben Speicherstand, Fehler und
+  Hinweise und «Bearbeiten | Probelauf». Wenn die App es verlangt, lässt sich ein Entwurf erst nach einem erfolgreichen
+  Probelauf aktivieren; der Probelauf sagt das.
+
+### Für den Betrieb
+
+- Braucht `@vollholz/workflow` 0.7.0 (Liste mit Auslöser, Schritten, Entwurf und Vorfällen; Teams mit Bereich).
+
+### Hinzugefügt
+
+- `RunView` (Lauf als Ablauf; `RunLog` nutzt ihn) mit `SubjectLink`; `RunLog` › `state` (Zustand am Anfang des Filters).
+- `StepListEditor` › `onOpenRun`; `onShowRuns(workflowId, { state })`.
+- `VersionList` › `onAdopted`, `onOpenDraft` (Zeile «Entwurf»); Vergleich, Ablauf und «Als Entwurf übernehmen» je Version.
+- `hasDraft(workflow, differs?)` und `DraftMark` (Marker «Entwurf»); `BadgeTone` › `draft`.
+- `WorkflowList` › `templates`, `builtinTemplates`; `WorkflowTemplate`, `builtinTemplates`.
+- `FlowRun` für Läufe: `live`, `below`, `FlowStepResult` (`active`, `text`); `FlowView` › `onDuplicate`.
+- `TeamScope` (Bereich für die Teams-Auswahl); `useTeams(q, enabled, scope)`, `useRun(id, { refetchInterval })`,
+  `useWorkflowMeta(scope, enabled)`.
+- Typen: `WorkflowSummary` › `trigger`, `stepCount`, `draftChanged`, `openIncidents` (nur in der Liste).
+- `showTitle` an `WorkflowList`, `RunLog` und `SettingsPanel` (Standard `true`; `false` blendet die Überschrift nur
+  sichtbar aus, wenn die App den Bereich im Seitenkopf nennt); `rowLink(open)` für ganz klickbare Tabellenzeilen.
+- Kopf «Kontextleiste» (eine Leiste der App je Ebene): `StepListEditor` › `slots` (`draft`, `actions`: Plätze in der
+  Leiste der App, gefüllt per Portal), `menuItems` (Einträge der App zuoberst im Menü), `requireProbe` (Aktivieren erst
+  nach erfolgreichem Probelauf mit diesem Entwurf); `RunView` › `slots` (`actions`); `WorkflowActions` (Zustand und Menü
+  ausserhalb des Editors: Aktivieren derselben Fassung, Verwerfen, Deaktivieren, Archivieren, Löschen),
+  `WorkflowDraftMark` (Marker «Entwurf» mit `onOpen`), `useDraftDiffers`, `NewWorkflowButton` («Neu» für die Leiste);
+  `WorkflowList` › `showCreate`, `onOpenRun(workflowId, runId)`; `RunLog` › `onOpenRun(runId)` (Run auf eigener Seite);
+  `DraftMark` › `onOpen`; `MenuItem.separator`; Export `fmtDateTime`; Typ `WorkflowMenuItem`.
+
+### Geändert
+
+- `FlowRun.onAssume` ist optional (nur im Probelauf).
+- Das Menü «Weitere Aktionen» liegt in `menu.tsx` (`MoreMenu`); der Editor enthält es weiter.
+- `ChangesList` › `empty` (Text ohne Änderungen).
+- `STATE_LABEL`: `draft` und `paused` heissen «Inaktiv» (bisher «Entwurf», «Pausiert»); `stateTone` liefert `ok` für
+  `active`, sonst `muted`. Der Filter von `WorkflowList` bietet «Aktiv», «Inaktiv», «Archiviert» und «Mit Entwurf»
+  (die beiden letzten filtert die Liste selbst).
+- `runTone('running' | 'waiting')` und `taskTone('in_progress')` liefern `info` (bisher `accent`); `Badge` kennt den Ton
+  `info` (`BadgeTone`).
+- Neue Aktionen aus der Auswahl starten mit den `default`-Werten ihres Eingabe-Schemas (bisher leer).
+- Nicht genommene Wege tragen die Klasse `wf-lane-skip` (bisher `skip`, die mit Klassen der App kollidieren konnte, z. B.
+  einem Sprunglink «Zum Inhalt springen»; der Weg lag dann über dem anderen).
+- `WorkflowList`: Spalten «Letzter Run» und «Run-Status» statt «Letzte Läufe» und «Akteur»; Art, Bereich und Datum
+  des Runs haben die Klasse `wf-col-wide` (bis 760 px ausgeblendet). Die Überschrift von `RunLog` heisst «Runs».
+- Mit `slots` entfallen im Menü des Editors «Name und Beschreibung …» und «Runs ansehen» (die App hat Einstellungen
+  und Reiter); ohne `slots` heisst der Eintrag «Runs ansehen» (bisher «Läufe ansehen»).
+
 ## [0.7.0] – 2026-11-03
 
 ### Für Nutzer

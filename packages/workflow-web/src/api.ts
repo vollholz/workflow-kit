@@ -38,7 +38,7 @@ export const wfKeys = {
   queues: ['workflow', 'queues'] as const,
   queue: (id: string) => ['workflow', 'queue', id] as const,
   queueMembers: (id: string) => ['workflow', 'queue-members', id] as const,
-  teams: (q: string) => ['workflow', 'teams', q] as const,
+  teams: (q: string, scope?: WorkflowScopeRef | null) => ['workflow', 'teams', q, scope?.type ?? '', scope?.id ?? ''] as const,
   calendars: ['workflow', 'calendars'] as const,
   calendar: (id: string) => ['workflow', 'calendar', id] as const,
 };
@@ -91,10 +91,10 @@ export function useWorkflowStatus() {
 }
 
 /** Angemeldete Ereignisse, Aktionen, Bezugstypen mit Feldern (im Bereich `scope`). */
-export function useWorkflowMeta(scope?: WorkflowScopeRef | null) {
+export function useWorkflowMeta(scope?: WorkflowScopeRef | null, enabled = true) {
   const w = useWorkflow();
   return useQuery({
-    queryKey: wfKeys.meta(scope),
+    queryKey: wfKeys.meta(scope), enabled,
     queryFn: ({ signal }) => wfRequest<WorkflowMetaJson>(w, 'GET', `/workflows/meta${qs({ scopeType: scope?.type, scopeId: scope?.id })}`, { signal }),
     staleTime: 5 * 60_000,
   });
@@ -264,10 +264,11 @@ export function useRuns(filter: RunFilter = {}, enabled = true, o: { refetchInte
   });
 }
 
-export function useRun(id: string | null | undefined) {
+export function useRun(id: string | null | undefined, o: { refetchInterval?: RefetchInterval } = {}) {
   const w = useWorkflow();
+  const every = o.refetchInterval;
   return useQuery({
-    queryKey: wfKeys.run(id ?? ''), enabled: !!id,
+    queryKey: wfKeys.run(id ?? ''), enabled: !!id, refetchInterval: typeof every === 'function' ? () => every() : every,
     queryFn: ({ signal }) => wfRequest<RunDetailJson>(w, 'GET', `/workflow-runs/${enc(id!)}`, { signal }),
   });
 }
@@ -376,11 +377,12 @@ export function useQueueMembers(id: string | null | undefined) {
 }
 
 /** Teams zur Auswahl (Port `teams` der App); `available: false`, wenn die App keine anbietet. */
-export function useTeams(q: string, enabled = true) {
+/** Teams zur Auswahl; mit `scope` (Bereich des Workflows) reicht `workflow:manage` dort (ab `@vollholz/workflow` 0.7.0). */
+export function useTeams(q: string, enabled = true, scope?: WorkflowScopeRef | null) {
   const w = useWorkflow();
   return useQuery({
-    queryKey: wfKeys.teams(q), enabled, staleTime: 60_000, placeholderData: keepPreviousData,
-    queryFn: ({ signal }) => wfRequest<{ available: boolean; items: TeamOptionJson[] }>(w, 'GET', `/queues/teams${qs({ q })}`, { signal }),
+    queryKey: wfKeys.teams(q, scope), enabled, staleTime: 60_000, placeholderData: keepPreviousData,
+    queryFn: ({ signal }) => wfRequest<{ available: boolean; items: TeamOptionJson[] }>(w, 'GET', `/queues/teams${qs({ q, scopeType: scope?.type, scopeId: scope?.id })}`, { signal }),
   });
 }
 

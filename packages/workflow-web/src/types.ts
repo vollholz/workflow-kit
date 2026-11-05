@@ -132,6 +132,13 @@ export interface WorkflowSettingsJson {
 export interface WorkflowSummary {
   id: string; name: string; description: string | null; kind: WorkflowKind; scope: RefJson; state: WorkflowState; revision: number;
   activeVersion: number | null; actor: ActorRefJson | null; pausedReason: string | null; createdBy: ActorRefJson; createdAt: string; updatedAt: string;
+  /** Nur in der Liste (ab `@vollholz/workflow` 0.7.0): Auslöser und Zahl der Schritte dessen, was läuft (aktive Version, sonst Entwurf). */
+  trigger?: Trigger | null;
+  stepCount?: number;
+  /** Nur in der Liste: Der Entwurf weicht von der aktiven Version ab. */
+  draftChanged?: boolean;
+  /** Nur in der Liste: Läufe mit offenem Vorfall. */
+  openIncidents?: number;
 }
 /** `GET /workflows/:id` (Entwurf mit Definition); nach dem Speichern zusätzlich `validation`. */
 export interface WorkflowDetail extends WorkflowSummary {
