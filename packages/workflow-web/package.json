@@ -1,6 +1,6 @@
 {
   "name": "@vollholz/workflow-web",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Oberfläche zu @vollholz/workflow (React): Provider und Bausteine für Editor, Arbeitsliste, Warteschlangen, Fälle, Protokoll",
   "type": "module",
   "license": "Apache-2.0",

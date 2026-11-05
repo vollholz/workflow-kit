@@ -22,7 +22,7 @@ export interface SubjectWorkflowBarProps {
   subject: WorkflowSubjectRef;
   /** Welche Workflows an diesem Bezug angeboten werden (Standard: alle aktiven mit manuellem Auslöser). */
   filter?: (workflow: WorkflowSummary) => boolean;
-  /** Lauf im Protokoll öffnen. */
+  /** Einen Run öffnen. */
   onOpenRun?: (runId: string) => void;
   /** Anzahl der letzten Läufe (Standard 5). */
   recent?: number;
@@ -99,9 +99,9 @@ export function SubjectWorkflowBar({ subject, filter, onOpenRun, onOpenTask, rec
       {start.isError && !open ? <ui.ErrorBox error={start.error} /> : null}
       <h4>Offene Aufgaben</h4>
       <SubjectTasks subject={subject} onOpenTask={onOpenTask} refetchInterval={every} />
-      <h4>Letzte Läufe</h4>
-      {runs.isPending ? <ui.Loading label="Läufe werden geladen …" /> : runs.isError ? <ui.ErrorBox error={runs.error} /> : items.length ? (
-        <ul className="wf-plain" aria-label="Letzte Läufe">
+      <h4>Letzte Runs</h4>
+      {runs.isPending ? <ui.Loading label="Runs werden geladen …" /> : runs.isError ? <ui.ErrorBox error={runs.error} /> : items.length ? (
+        <ul className="wf-plain" aria-label="Letzte Runs">
           {items.map(r => (
             <li key={r.id} className="wf-row">
               <Badge tone={runTone(r.state)}>{RUN_STATE_LABEL[r.state]}</Badge>
@@ -110,7 +110,7 @@ export function SubjectWorkflowBar({ subject, filter, onOpenRun, onOpenTask, rec
             </li>
           ))}
         </ul>
-      ) : <p className="wf-muted wf-small">Noch keine Läufe zu diesem Bezug.</p>}
+      ) : <p className="wf-muted wf-small">Noch keine Runs zu diesem Bezug.</p>}
       {open ? <StartDialog m={open} busy={start.isPending} error={start.error} onClose={() => { setOpen(null); start.reset(); }} onStart={input => run(open, input)} /> : null}
     </section>
   );

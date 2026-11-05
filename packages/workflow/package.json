@@ -1,6 +1,6 @@
 {
   "name": "@vollholz/workflow",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "App-agnostischer Workflow-Baukasten: Ports, Definitionen, Ausdrücke, Engine für Automationen, Migrationen (PostgreSQL, RLS), Fastify-Plugin",
   "type": "module",
   "license": "Apache-2.0",

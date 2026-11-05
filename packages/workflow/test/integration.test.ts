@@ -239,7 +239,7 @@ describe('Automation in der App «shop» (PostgreSQL)', { skip }, () => {
     assert.equal(s.enabled, true);
     ok(await call('gus', 'PUT', '/v1/workflows/settings', { enabled: true }));
     const status = ok(await call('ada', 'GET', '/v1/workflows/status'));
-    assert.deepEqual([status.available, status.stage, status.version], [true, 2, '0.7.0']);
+    assert.deepEqual([status.available, status.stage, status.version], [true, 2, '0.8.0']);
     assert.ok(audit.some(e => e.action === 'workflow.settings_changed'));
   });
 
@@ -389,6 +389,61 @@ describe('Automation in der App «shop» (PostgreSQL)', { skip }, () => {
     assert.deepEqual(after, before);
     assert.equal((await admin.query('SELECT state FROM shop.orders WHERE id = $1', [order])).rows[0].state, 'new');
     assert.equal((await call('bea', 'POST', `/v1/workflows/${cancelWf}/dry-run`, {})).status, 403);
+  });
+
+  test('requireDryRun: Aktivieren erst nach erfolgreichem Probelauf mit genau diesem Entwurf', async () => {
+    // Zweite Einbindung derselben App mit der Option (Tabellen und Migrationen sind schon da)
+    const strict = workflow({
+      schema: 'shop', host, subjects: [orderSubject], actions, requireDryRun: true,
+      events: ['order.created', 'order.updated'].map(type => ({ type, label: type, subjectType: 'order' })),
+      retryDelayMs: 0, triggerCacheMs: 60_000, clock: () => now,
+    });
+    const app2 = Fastify();
+    app2.setErrorHandler((e, _req, reply) => {
+      const status = e instanceof HttpError ? e.statusCode : (e as { statusCode?: number }).statusCode ?? 500;
+      void reply.status(status).send({ code: e instanceof HttpError ? e.code : 'error', message: e instanceof Error ? e.message : 'Fehler' });
+    });
+    await app2.register(strict.plugin);
+    await app2.ready();
+    const call2 = async (method: string, url: string, body?: unknown, headers: Record<string, string> = {}) => {
+      const r = await app2.inject({ method: method as 'GET', url, headers: { 'x-user': 'ada', ...headers }, ...(body !== undefined ? { payload: body as object } : {}) });
+      return { status: r.statusCode, body: r.body ? JSON.parse(r.body) : null };
+    };
+    try {
+      const order = await newOrder(A, 'Erna', 80);
+      const def = { schemaVersion: 1, kind: 'automation', trigger: { manual: {} }, steps: [{ id: 's', set: { done: 'ja' } }] };
+      const created = ok(await call2('POST', '/v1/workflows', { name: 'Mit Probelauf', scope: { type: 'shop', id: 'main' }, definition: def }), 201);
+      const id = created.id as string;
+      const denied = await call2('POST', `/v1/workflows/${id}/activate`, {});
+      assert.equal(denied.status, 409);
+      assert.equal(denied.body.code, 'dry-run-required');
+      // Gescheiterter Probelauf gibt nichts frei
+      const failing = { ...def, steps: [{ id: 'x', end: { result: 'failed' } }] };
+      assert.equal(ok(await call2('POST', `/v1/workflows/${id}/dry-run`, { definition: failing, subject: { type: 'order', id: order } })).result, 'failed');
+      assert.equal((await call2('POST', `/v1/workflows/${id}/activate`, {})).status, 409);
+      // Erfolgreicher Probelauf mit dem Entwurf: Revision bleibt, Aktivieren geht
+      const before = ok(await call2('GET', `/v1/workflows/${id}`));
+      assert.equal(ok(await call2('POST', `/v1/workflows/${id}/dry-run`, { definition: def, subject: { type: 'order', id: order } })).result, 'completed');
+      assert.equal(ok(await call2('GET', `/v1/workflows/${id}`)).revision, before.revision, 'Probelauf ändert die Revision nicht');
+      ok(await call2('POST', `/v1/workflows/${id}/activate`, {}));
+      // Geänderter Entwurf: wieder gesperrt; Probelauf einer Version gibt den Entwurf nicht frei
+      const changed = { ...def, steps: [{ id: 's', set: { done: 'nein' } }] };
+      const saved = ok(await call2('GET', `/v1/workflows/${id}`));
+      ok(await call2('PUT', `/v1/workflows/${id}`, { definition: changed }, { 'if-match': `"${saved.revision}"` }), 200);
+      ok(await call2('POST', `/v1/workflows/${id}/dry-run`, { version: 1, subject: { type: 'order', id: order } }));
+      assert.equal((await call2('POST', `/v1/workflows/${id}/activate`, {})).status, 409);
+      ok(await call2('POST', `/v1/workflows/${id}/dry-run`, { subject: { type: 'order', id: order } }));
+      assert.equal(ok(await call2('POST', `/v1/workflows/${id}/activate`, {})).activeVersion, 2);
+      // Entwurf gleich der zuletzt aktiven Fassung (deaktiviert, wieder aktivieren mit Akteur): ohne Probelauf
+      ok(await call2('POST', `/v1/workflows/${id}/pause`));
+      assert.equal(ok(await call2('POST', `/v1/workflows/${id}/activate`, {})).state, 'active');
+      // Ohne die Option merkt sich der Probelauf nichts
+      const plain = await activeWorkflow('ada', 'Ohne Pflicht', def);
+      ok(await call('ada', 'POST', `/v1/workflows/${plain}/dry-run`, { definition: def, subject: { type: 'order', id: order } }));
+      assert.equal((await admin.query('SELECT dry_run_checksum FROM shop.workflow WHERE id = $1', [plain])).rows[0].dry_run_checksum, null);
+    } finally {
+      await app2.close();
+    }
   });
 
   test('Zeitplan: tick mit der Worker-Rolle startet fällige Läufe; Warten über runAt', async () => {

@@ -76,6 +76,8 @@ export interface WorkflowRow {
   state: 'draft' | 'active' | 'paused' | 'archived'; draft: unknown; revision: number; active_version: number | null;
   actor_id: string | null; actor_kind: ActorRef['kind'] | null; paused_reason: string | null;
   created_by_id: string; created_by_kind: string; created_at: Date | string; updated_at: Date | string;
+  /** Prüfsumme des Entwurfs, den zuletzt ein Probelauf erfolgreich durchgespielt hat (nur mit `requireDryRun`, Migration 003). */
+  dry_run_checksum?: string | null;
 }
 
 export interface RunRow {

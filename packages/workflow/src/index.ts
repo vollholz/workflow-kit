@@ -49,7 +49,7 @@ export {
 } from './tasks.ts';
 
 /** Version des Pakets (gleich wie in package.json, geprüft im Test). */
-export const WORKFLOW_PACKAGE_VERSION = '0.7.0';
+export const WORKFLOW_PACKAGE_VERSION = '0.8.0';
 /** Ausbaustufe nach Konzept Abschnitt 13. */
 export const WORKFLOW_STAGE = 2;
 
@@ -88,6 +88,12 @@ export interface WorkflowOptions {
   retryDelayMs?: number;
   /** Uhr (für Tests; Standard `() => new Date()`). */
   clock?: () => Date;
+  /**
+   * Aktivieren nur nach einem erfolgreichen Probelauf mit genau diesem Entwurf (Standard `false`): Der Probelauf merkt
+   * sich die Prüfsumme des durchgespielten Entwurfs (Migration 003), `POST …/activate` antwortet sonst 409
+   * `dry-run-required`. Entspricht der Entwurf der aktiven bzw. zuletzt aktiven Fassung, braucht es keinen.
+   */
+  requireDryRun?: boolean;
 }
 
 export interface Workflow {
@@ -176,7 +182,7 @@ export function workflow(o: WorkflowOptions): Workflow {
     registerRoutes(app, {
       engine, host: o.host, schema: o.schema, prefix, enabled, stage: WORKFLOW_STAGE, version: WORKFLOW_PACKAGE_VERSION,
       tenantScope: o.tenantScope ?? { type: 'tenant', id: '*' }, subjects: o.subjects, actions: o.actions, events: o.events,
-      stateFields: o.stateFields ?? [], fields: o.fields ?? [], validate,
+      stateFields: o.stateFields ?? [], fields: o.fields ?? [], validate, requireDryRun: o.requireDryRun ?? false,
     });
   };
 
