@@ -10,7 +10,7 @@ folgen die Angaben für die Entwickler der App.
 
 ## [Unveröffentlicht]
 
-## [0.7.0] – 2026-11-03
+## [0.7.0] – 2026-11-05
 
 ### Für Nutzer
 
