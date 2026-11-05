@@ -244,7 +244,7 @@ describe('SubjectWorkflowBar', () => {
     renderWith(<SubjectWorkflowBar subject={{ type: 'order', id: 'o1' }} onOpenRun={onOpenRun} />);
     const start = await screen.findByRole('button', { name: 'Stornieren' });
     expect(screen.queryByRole('button', { name: 'Automatisch' })).toBeNull();
-    expect(within(screen.getByRole('list', { name: 'Letzte Läufe' })).getByText('Erfolgreich')).toBeInTheDocument();
+    expect(within(screen.getByRole('list', { name: 'Letzte Runs' })).getByText('Erfolgreich')).toBeInTheDocument();
     expect(calls.find(c => c.path === '/v1/workflow-runs')!.search).toBe('?subjectType=order&subjectId=o1&limit=5');
     await userEvent.click(start);
     const dialog = screen.getByRole('dialog', { name: 'Stornieren' });
@@ -254,7 +254,7 @@ describe('SubjectWorkflowBar', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Starten' }));
     expect(await screen.findByText('«Stornieren» gestartet.')).toBeInTheDocument();
     expect(calls.find(c => c.method === 'POST')!.body).toEqual({ subject: { type: 'order', id: 'o1' }, input: { reason: 'Kundin wünscht es' } });
-    await userEvent.click(within(screen.getByRole('list', { name: 'Letzte Läufe' })).getByRole('button', { name: 'Storno' }));
+    await userEvent.click(within(screen.getByRole('list', { name: 'Letzte Runs' })).getByRole('button', { name: 'Storno' }));
     expect(onOpenRun).toHaveBeenCalledWith(R1);
   });
 
@@ -267,7 +267,7 @@ describe('SubjectWorkflowBar', () => {
     });
     const { unmount } = renderWith(<SubjectWorkflowBar subject={{ type: 'order', id: 'o1' }} />, { perms: ['workflow:read'] });
     expect(await screen.findByText(/fehlt dir das Recht «Workflows von Hand starten»/)).toBeInTheDocument();
-    expect(screen.getByText('Noch keine Läufe zu diesem Bezug.')).toBeInTheDocument();
+    expect(screen.getByText('Noch keine Runs zu diesem Bezug.')).toBeInTheDocument();
     unmount();
     mockFetch({ 'GET /v1/workflows/status': () => json({ ...STATUS, available: false }) });
     const { container } = renderWith(<SubjectWorkflowBar subject={{ type: 'order', id: 'o1' }} />);

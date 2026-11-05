@@ -212,7 +212,7 @@ test('dispatch kostet ohne Auslöser im Zwischenspeicher keine Abfrage; checkTra
 test('Migrationen mit Schema, Rollen und Ausdrücken der App', () => {
   const wf = workflow(shop().options);
   const m = wf.migrations({ schema: 'shop', appRole: 'shop_app', schedRole: 'shop_worker', tenantExpr: "current_setting('shop.tenant')::uuid" });
-  assert.deepEqual(m.map(x => x.name), ['workflow_001_core.sql', 'workflow_002_tasks.sql']);
+  assert.deepEqual(m.map(x => x.name), ['workflow_001_core.sql', 'workflow_002_tasks.sql', 'workflow_003_dry_run.sql']);
   assert.match(m[0]!.checksum, /^[0-9a-f]{64}$/);
   assert.doesNotMatch(m[0]!.sql, /\{\{\w+\}\}/, 'alle Platzhalter ersetzt');
   assert.match(m[0]!.sql, /CREATE TABLE IF NOT EXISTS shop\.workflow_run/);

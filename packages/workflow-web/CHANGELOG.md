@@ -10,6 +10,23 @@ folgen die Angaben für die Entwickler der App.
 
 ## [Unveröffentlicht]
 
+## [0.9.0] – 2026-11-05
+
+### Für Nutzer
+
+- Auch an der Leiste am Bezug und bei Aufgaben heisst es «Run» statt «Lauf»: «Letzte Runs», «Noch keine Runs zu diesem
+  Bezug», in einer Aufgabe «Run» mit «Run öffnen» (bisher «Lauf» mit «Im Protokoll öffnen»).
+
+### Für den Betrieb
+
+- (keine)
+
+### Geändert
+
+- Texte in `SubjectWorkflowBar` und `TaskDetail` (siehe oben); mit `@vollholz/workflow` 0.8.0 und `requireDryRun` zeigt
+  der Aktivieren-Dialog die Meldung des Servers, wenn der Probelauf fehlt (`StepListEditor` › `requireProbe` verhindert
+  das in der Regel vorher).
+
 ## [0.8.0] – 2026-11-05
 
 ### Für Nutzer

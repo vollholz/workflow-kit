@@ -80,6 +80,7 @@ const wf = workflow({
   tenantScope: { type: 'tenant', id: '*' },   // Bereich für workflow:admin (Standard)
   triggerCacheMs: 10_000,                // Zwischenspeicher der Auslöser je Mandant (Standard)
   retryDelayMs: 30_000,                  // erste Wartezeit vor einer Wiederholung, verdoppelt (Standard)
+  requireDryRun: true,                   // Aktivieren nur nach erfolgreichem Probelauf mit dem Entwurf (Standard false)
 });
 await app.register(wf.plugin);
 ```

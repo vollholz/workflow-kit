@@ -10,6 +10,25 @@ folgen die Angaben für die Entwickler der App.
 
 ## [Unveröffentlicht]
 
+## [0.8.0] – 2026-11-05
+
+### Für Nutzer
+
+- Wenn die App es verlangt, lässt sich ein Workflow erst aktivieren, nachdem ein Probelauf mit genau diesem Entwurf
+  erfolgreich war; sonst meldet das Aktivieren «Vor dem Aktivieren braucht es einen erfolgreichen Probelauf mit genau
+  diesem Entwurf.» Entspricht der Entwurf der aktiven bzw. zuletzt aktiven Fassung, braucht es keinen.
+
+### Für den Betrieb
+
+- Migration `workflow_003_dry_run` (vier Spalten an `workflow`, idempotent). Sie läuft mit den übrigen Migrationen des
+  Baukastens.
+
+### Hinzugefügt
+
+- Option `requireDryRun` (Standard `false`): Ein erfolgreicher Probelauf eines Entwurfs merkt sich dessen Prüfsumme
+  (`dry_run_checksum`, `dry_run_at`, `dry_run_by_*`, ohne Revision und `updated_at` zu ändern); `POST …/activate`
+  antwortet sonst 409 `dry-run-required`. Ein Probelauf einer Version (`version`) gibt den Entwurf nicht frei.
+
 ## [0.7.0] – 2026-11-05
 
 ### Für Nutzer

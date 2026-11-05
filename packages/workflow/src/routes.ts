@@ -46,6 +46,8 @@ export interface RouteOptions {
   stateFields: StateField[];
   fields: FieldKind[];
   validate(definition: unknown): ReturnType<typeof validateDefinition>;
+  /** Aktivieren nur nach einem erfolgreichen Probelauf mit diesem Entwurf (`WorkflowOptions.requireDryRun`). */
+  requireDryRun: boolean;
 }
 
 /** Antwort von `GET <prefix>/workflows/status`. */
@@ -436,6 +438,15 @@ export function registerRoutes(app: FastifyInstance, o: RouteOptions): void {
     const stage = stageProblems(r.definition);
     if (stage.length) throw fail(422, 'invalid-definition', `Noch nicht ausführbar: ${problems(stage)}`);
     const def: WorkflowDefinition = r.definition;
+    const checksum = definitionChecksum(def);
+    if (o.requireDryRun) {
+      // Etwas Neues (nie aktiviert oder abweichend von der aktiven bzw. zuletzt aktiven Fassung) nur nach einem Probelauf
+      const last = locked.active_version === null ? null
+        : (await tx.query<{ checksum: string }>(`SELECT checksum FROM ${S('workflow_version')} WHERE workflow_id = $1 AND version = $2`, [w.id, locked.active_version])).rows[0]?.checksum ?? null;
+      if (checksum !== last && locked.dry_run_checksum !== checksum) {
+        throw fail(409, 'dry-run-required', 'Vor dem Aktivieren braucht es einen erfolgreichen Probelauf mit genau diesem Entwurf.');
+      }
+    }
     if (def.kind === 'automation' && 'schedule' in def.trigger) {
       if (!isValidTimeZone(def.trigger.schedule.timezone)) throw fail(422, 'invalid-definition', `/trigger/schedule/timezone: Unbekannte Zeitzone «${def.trigger.schedule.timezone}»`);
       try { nextCronTime(def.trigger.schedule.cron, def.trigger.schedule.timezone, new Date()); }
@@ -446,7 +457,6 @@ export function registerRoutes(app: FastifyInstance, o: RouteOptions): void {
       if (active >= settings!.limits.activeWorkflows) throw fail(409, 'limit', `Höchstens ${settings!.limits.activeWorkflows} aktive Workflows je Mandant.`);
     }
     const version = ((await tx.query<{ n: number }>(`SELECT coalesce(max(version), 0)::int AS n FROM ${S('workflow_version')} WHERE workflow_id = $1`, [w.id])).rows[0]?.n ?? 0) + 1;
-    const checksum = definitionChecksum(def);
     await tx.query(
       `INSERT INTO ${S('workflow_version')} (tenant_id, workflow_id, version, definition, schema_version, checksum, actor_id, actor_kind, activated_by_id, activated_by_kind)
        VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10)`,
@@ -598,6 +608,13 @@ export function registerRoutes(app: FastifyInstance, o: RouteOptions): void {
       workflowId: w.id, definition: def, actor: w.actor_id && w.actor_kind && w.state === 'active' ? { id: w.actor_id, kind: w.actor_kind } : actor,
       scope: scopeOf(w), subject, event, input: body.input ?? null, limits: settings!.limits, ...(body.assume ? { assume: body.assume } : {}),
     });
+    // Mit `requireDryRun`: ein erfolgreicher Probelauf eines Entwurfs (nicht einer Version) gibt das Aktivieren frei –
+    // ohne Revision und `updated_at` zu ändern (der Editor speichert sonst gegen einen neuen Stand).
+    if (o.requireDryRun && body.version === undefined && result.result === 'completed' && result.triggerMatches !== false) {
+      await tx.query(
+        `UPDATE ${S('workflow')} SET dry_run_checksum = $2, dry_run_at = now(), dry_run_by_id = $3, dry_run_by_kind = $4 WHERE id = $1`,
+        [w.id, definitionChecksum(def), actor.id, actor.kind]);
+    }
     return result;
   }));
 

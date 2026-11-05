@@ -53,7 +53,7 @@ export interface MyWorkProps {
   /** Geöffnete Aufgabe (gesteuert); ohne Angabe verwaltet der Baustein sie selbst. */
   taskId?: string | null;
   onOpenTask?: (id: string | null) => void;
-  /** Lauf im Protokoll öffnen. */
+  /** Den Run öffnen, aus dem die Aufgabe stammt. */
   onOpenRun?: (runId: string) => void;
   /** Überschrift (Standard «Meine Arbeit»). */
   title?: string;
@@ -243,7 +243,7 @@ export function TaskDetail({ taskId, onClose, onOpenRun }: TaskDetailProps) {
         <dt>Erstellt</dt><dd>{fmtDateTime(t.createdAt)}</dd>
         {t.outcome ? <><dt>Ergebnis</dt><dd>{outcomeLabel(t.outcome)}{t.reason ? ` – ${t.reason}` : ''}</dd></> : null}
         {t.completedBy ? <><dt>{t.state === 'cancelled' ? 'Abgebrochen von' : 'Erledigt von'}</dt><dd><ActorName actor={t.completedBy} />{`, ${fmtDateTime(t.completedAt)}`}</dd></> : null}
-        {t.runId && onOpenRun ? <><dt>Lauf</dt><dd><button type="button" className="wf-link" onClick={() => onOpenRun(t.runId!)}>Im Protokoll öffnen</button></dd></> : null}
+        {t.runId && onOpenRun ? <><dt>Run</dt><dd><button type="button" className="wf-link" onClick={() => onOpenRun(t.runId!)}>Run öffnen</button></dd></> : null}
       </dl>
       {active && (a.take || a.release || a.assign || a.handOver || a.cancel) ? (
         <div className="wf-row" role="group" aria-label="Aktionen">
